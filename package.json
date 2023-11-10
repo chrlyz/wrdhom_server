@@ -1,0 +1,23 @@
+{
+  "name": "wrdhom_server",
+  "version": "0.1.0",
+  "description": "Server for WrdHom: the auditable social-media platform",
+  "main": "main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node ./build/main.js"
+  },
+  "keywords": [],
+  "author": "chrlyz",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "fastify": "^4.24.3",
+    "wrdhom": "^0.1.1",
+    "ipfs-car": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.9.0",
+    "typescript": "^5.2.2"
+  }
+}
