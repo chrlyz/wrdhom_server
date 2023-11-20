@@ -12,9 +12,11 @@
   "license": "MIT",
   "type": "module",
   "dependencies": {
+    "@aurowallet/mina-provider": "^1.0.0",
+    "@fastify/cors": "^8.4.1",
     "fastify": "^4.24.3",
-    "wrdhom": "^0.1.1",
-    "ipfs-car": "^1.0.0"
+    "ipfs-car": "^1.0.0",
+    "wrdhom": "^0.1.1"
   },
   "devDependencies": {
     "@types/node": "^20.9.0",
