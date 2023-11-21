@@ -14,12 +14,14 @@
   "dependencies": {
     "@aurowallet/mina-provider": "^1.0.0",
     "@fastify/cors": "^8.4.1",
+    "@prisma/client": "^5.6.0",
     "fastify": "^4.24.3",
     "ipfs-car": "^1.0.0",
     "wrdhom": "^0.1.1"
   },
   "devDependencies": {
     "@types/node": "^20.9.0",
+    "prisma": "^5.6.0",
     "typescript": "^5.2.2"
   }
 }
