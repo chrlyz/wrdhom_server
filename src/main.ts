@@ -5,6 +5,7 @@ import cors from '@fastify/cors';
 import { PrismaClient } from '@prisma/client';
 import { createFileEncoderStream, CAREncoderStream } from 'ipfs-car';
 import { Blob } from '@web-std/file';
+import { create } from '@web3-storage/w3up-client';
 
 // ============================================================================
 
@@ -15,6 +16,13 @@ await server.register(cors, {
 });
 
 const prisma = new PrismaClient();
+
+const web3storage = await create();
+console.log('Logging-in to web3.storage...');
+await web3storage.login('chrlyz@skiff.com');
+await web3storage.setCurrentSpace('did:key:z6Mkj6kybvJKUYQNCGvg7vKPayZdn272rPLsVQzF8oDAV8B7');
+
+// ============================================================================
 
 server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
 
@@ -50,6 +58,9 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
     );
     
     if (isSigned) {
+
+      const uploadedFile = await web3storage.uploadFile(file);
+      console.log('Uploaded File: ' + uploadedFile.toString());
 
       await createSQLPost(posterAddress, postContentID);
 
