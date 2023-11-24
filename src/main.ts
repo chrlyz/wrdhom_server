@@ -50,8 +50,6 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
   .pipeTo(new WritableStream());
 
   if (postCID.toString() === postContentID) {
-    console.log(postCID.toString());
-    console.log(postContentID);
     const isSigned = signature.verify(
       PublicKey.fromBase58(posterAddress), 
       [CircuitString.fromString(postContentID).hash()]
@@ -60,9 +58,8 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
     if (isSigned) {
 
       const uploadedFile = await web3storage.uploadFile(file);
-      console.log('Uploaded File: ' + uploadedFile.toString());
 
-      await createSQLPost(posterAddress, postContentID);
+      await createSQLPost(posterAddress, postContentID, signature);
 
       return request.body;
     } else {
@@ -70,8 +67,6 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
     }
   } else {
       reply.code(401).send({error: `Derived post CID, doesn't match signed post CID`});
-      console.log(postCID.toString());
-      console.log(postContentID);
   }
 });
 
@@ -92,28 +87,26 @@ interface SignedPost {
 
 // ============================================================================
 
-const createSQLPost = async (posterAddress: string, postContentID: string) => {
+const createSQLPost = async (posterAddress: string, postContentID: string, signature: Signature) => {
   const allpostscounter = await prisma.posts.count();
   const userpostsCID = await prisma.posts.findMany({
     where: {
-      posteraddress: posterAddress
+      posterAddress: posterAddress
     },
     select: {
-      postcontentid: true
+      postContentID: true
     }
   });
   const userpostscounter = userpostsCID.length;
-  const lastBlock = await fetchLastBlock('https://proxy.berkeley.minaexplorer.com/graphql');
-  const postblockheight = lastBlock.blockchainLength.toBigint();
 
   await prisma.posts.create({
     data: {
-      posteraddress: posterAddress,
-      postcontentid: postContentID,
-      allpostscounter: (allpostscounter + 1),
-      userpostscounter: (userpostscounter + 1),
-      postblockheight: postblockheight,
-      deletionblockheight: 0
+      posterAddress: posterAddress,
+      postContentID: postContentID,
+      allPostsCounter: (allpostscounter + 1),
+      userPostsCounter: (userpostscounter + 1),
+      deletionBlockHeight: 0,
+      minaSignature: signature.toBase58()
     }
-  })
+  });
 }
