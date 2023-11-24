@@ -1,3 +1,6 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,12 +11,13 @@ datasource db {
 }
 
 model posts {
-  posteraddress       String
-  postcontentid       String
-  allpostscounter     BigInt
-  userpostscounter    BigInt
-  postblockheight     BigInt
-  deletionblockheight BigInt
+  posterAddress       String
+  postContentID       String
+  allPostsCounter     BigInt
+  userPostsCounter    BigInt
+  postBlockHeight     BigInt?
+  deletionBlockHeight BigInt
+  minaSignature       String
 
-  @@id([posteraddress, postcontentid])
+  @@id([posterAddress, postContentID])
 }
