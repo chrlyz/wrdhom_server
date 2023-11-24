@@ -19,7 +19,7 @@
     "@web3-storage/w3up-client": "^11.0.2",
     "fastify": "^4.24.3",
     "ipfs-car": "^1.0.0",
-    "wrdhom": "^0.1.1"
+    "wrdhom": "^0.1.2"
   },
   "devDependencies": {
     "@types/node": "^20.9.0",

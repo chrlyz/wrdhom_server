@@ -6,6 +6,7 @@ import { PrismaClient } from '@prisma/client';
 import { createFileEncoderStream, CAREncoderStream } from 'ipfs-car';
 import { Blob } from '@web-std/file';
 import { create } from '@web3-storage/w3up-client';
+import { PostState, PostsTransition, Posts, PostsContract } from 'wrdhom';
 
 // ============================================================================
 
