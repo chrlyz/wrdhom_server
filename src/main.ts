@@ -1,12 +1,13 @@
 import fastify from 'fastify';
-import { CircuitString, PublicKey, Signature, fetchLastBlock} from 'o1js';
-import { SignedData } from '@aurowallet/mina-provider';
+import { CircuitString, PublicKey, Signature, fetchLastBlock,
+  MerkleMap, Field, Poseidon } from 'o1js';
 import cors from '@fastify/cors';
 import { PrismaClient } from '@prisma/client';
 import { createFileEncoderStream, CAREncoderStream } from 'ipfs-car';
 import { Blob } from '@web-std/file';
 import { create } from '@web3-storage/w3up-client';
 import { PostState, PostsTransition, Posts, PostsContract } from 'wrdhom';
+import Client from 'mina-signer';
 
 // ============================================================================
 
@@ -23,18 +24,26 @@ console.log('Logging-in to web3.storage...');
 await web3storage.login('chrlyz@skiff.com');
 await web3storage.setCurrentSpace('did:key:z6Mkj6kybvJKUYQNCGvg7vKPayZdn272rPLsVQzF8oDAV8B7');
 
+const minaSigner = new Client({network: 'mainnet'});
+
+const usersPostsCountersMap = new MerkleMap();
+const postsMap = new MerkleMap();
+
+console.log('Compiling Posts ZkProgram...');
+await Posts.compile();
+console.log('Compiling PostsContract...');
+await PostsContract.compile();
+console.log('Compiled');
+
 // ============================================================================
 
 server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
 
-  const signatureJSON = {
-    r: request.body.signedData.signature.field,
-    s: request.body.signedData.signature.scalar
-  }
+  console.log(request.body.signedData);
 
-  const signature = Signature.fromJSON(signatureJSON);
-  const posterAddress = request.body.signedData.publicKey;
-  const postContentID = request.body.signedData.data;
+  const signature = Signature.fromBase58(request.body.signedData.signature);
+  const posterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
+  const postContentIDAsBigInt = Field(request.body.signedData.data[0]).toBigInt();
 
   const file = new Blob([request.body.post]);
   let postCID: any;
@@ -50,18 +59,87 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
   .pipeThrough(new CAREncoderStream())
   .pipeTo(new WritableStream());
 
-  if (postCID.toString() === postContentID) {
-    const isSigned = signature.verify(
-      PublicKey.fromBase58(posterAddress), 
-      [CircuitString.fromString(postContentID).hash()]
-    );
+  const postCIDAsBigInt = CircuitString.fromString(postCID.toString()).hash().toBigInt();
+
+  // Check that content and signed CID match
+  if (postCIDAsBigInt === postContentIDAsBigInt) {
+
+    const castedSignedData = {
+      signature: request.body.signedData.signature,
+      publicKey: request.body.signedData.publicKey,
+      data: request.body.signedData.data.map((value) => Field(value).toBigInt())
+    }
+
+    const isSigned = minaSigner.verifyFields(castedSignedData);
+    console.log(isSigned);
+
+    const isSigned2 = signature.verify(posterAddress, [CircuitString.fromString(postCID.toString()).hash()])
+    console.log('o1js signed: ' + isSigned2.toBoolean());
     
+    // Check that the signature is valid
     if (isSigned) {
 
+      const allPostsCounter = Field(await prisma.posts.count());
+      console.log('allPostsCounter: ' + allPostsCounter.toBigInt());
+      const userPostsCID = await prisma.posts.findMany({
+        where: {
+          posterAddress: posterAddress.toBase58()
+        },
+        select: {
+          postContentID: true
+        }
+      });
+      const userPostsCounter = Field(userPostsCID.length);
+      console.log('userPostsCounter: ' + userPostsCounter.toBigInt());
+
+      const lastBlock = await fetchLastBlock('https://proxy.berkeley.minaexplorer.com/graphql');
+      const postBlockHeight = Field(lastBlock.blockchainLength.toString());
+
+      const postCIDAsCircuitString = CircuitString.fromString(postCID.toString());
+
+      const postState = new PostState({
+        posterAddress: posterAddress,
+        postContentID: postCIDAsCircuitString,
+        allPostsCounter: allPostsCounter.add(1),
+        userPostsCounter: userPostsCounter.add(1),
+        postBlockHeight: postBlockHeight,
+        deletionBlockHeight: Field(0),
+      });
+
+      const initialUsersPostsCounters = usersPostsCountersMap.getRoot();
+      const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
+      const userPostsCounterWitness = 
+        usersPostsCountersMap.getWitness(posterAddressAsField);
+      usersPostsCountersMap.set(posterAddressAsField, postState.userPostsCounter);
+      const latestUsersPostsCounters = usersPostsCountersMap.getRoot();
+
+      const initialPosts = postsMap.getRoot();
+      const postKey = Poseidon.hash([posterAddressAsField, postCIDAsCircuitString.hash()]);
+      const postWitness = postsMap.getWitness(postKey);
+      postsMap.set(postKey, postState.hash());
+      const latestPosts = postsMap.getRoot();
+
+      console.log('transition');
+      try {
+      const transition = PostsTransition.createPostPublishingTransition(
+        signature,
+        postState.allPostsCounter.sub(1),
+        initialUsersPostsCounters,
+        latestUsersPostsCounters,
+        postState.userPostsCounter.sub(1),
+        userPostsCounterWitness,
+        initialPosts,
+        latestPosts,
+        postState,
+        postWitness
+      );
+      console.log(transition);
+      } catch (e) {
+        console.log(e);
+      }
+
       const uploadedFile = await web3storage.uploadFile(file);
-
-      await createSQLPost(posterAddress, postContentID, signature);
-
+      await createSQLPost(postState, signature);
       return request.body;
     } else {
         reply.code(401).send({error: `Post isn't signed`});
@@ -83,29 +161,23 @@ server.listen({ port: 3001 }, (err, address) => {
 
 interface SignedPost {
   post: string,
-  signedData: SignedData
+  signedData: {
+    signature: string,
+    publicKey: string,
+    data: string[]
+  }
 }
 
 // ============================================================================
 
-const createSQLPost = async (posterAddress: string, postContentID: string, signature: Signature) => {
-  const allpostscounter = await prisma.posts.count();
-  const userpostsCID = await prisma.posts.findMany({
-    where: {
-      posterAddress: posterAddress
-    },
-    select: {
-      postContentID: true
-    }
-  });
-  const userpostscounter = userpostsCID.length;
+const createSQLPost = async (postState: PostState, signature: Signature) => {
 
   await prisma.posts.create({
     data: {
-      posterAddress: posterAddress,
-      postContentID: postContentID,
-      allPostsCounter: (allpostscounter + 1),
-      userPostsCounter: (userpostscounter + 1),
+      posterAddress: postState.posterAddress.toBase58(),
+      postContentID: postState.postContentID.toString(),
+      allPostsCounter: postState.allPostsCounter.toBigInt(),
+      userPostsCounter: postState.userPostsCounter.toBigInt(),
       deletionBlockHeight: 0,
       minaSignature: signature.toBase58()
     }

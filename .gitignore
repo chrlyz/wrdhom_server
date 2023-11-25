@@ -5,6 +5,10 @@ build
 # PostgreSQL/Prisma
 .env
 
+# Mina
+/keys
+config.json
+
 # Editor
 .vscode
 
