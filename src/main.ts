@@ -1,13 +1,13 @@
 import fastify from 'fastify';
 import { CircuitString, PublicKey, Signature, fetchLastBlock,
-  MerkleMap, Field, Poseidon } from 'o1js';
+  MerkleMap, Field, Poseidon, Mina, PrivateKey } from 'o1js';
 import cors from '@fastify/cors';
 import { PrismaClient } from '@prisma/client';
 import { createFileEncoderStream, CAREncoderStream } from 'ipfs-car';
 import { Blob } from '@web-std/file';
 import { create } from '@web3-storage/w3up-client';
-import { PostState, PostsTransition, Posts, PostsContract } from 'wrdhom';
-import Client from 'mina-signer';
+import { PostState, PostsTransition, Posts, PostsContract, Config } from 'wrdhom';
+import fs from 'fs/promises';
 
 // ============================================================================
 
@@ -24,10 +24,24 @@ console.log('Logging-in to web3.storage...');
 await web3storage.login('chrlyz@skiff.com');
 await web3storage.setCurrentSpace('did:key:z6Mkj6kybvJKUYQNCGvg7vKPayZdn272rPLsVQzF8oDAV8B7');
 
-const minaSigner = new Client({network: 'mainnet'});
+const configJson: Config = JSON.parse(await fs.readFile('config.json', 'utf8'));
+const config = configJson.deployAliases['posts'];
+const Network = Mina.Network(config.url);
+Mina.setActiveInstance(Network);
+const fee = Number(config.fee) * 1e9; // in nanomina (1 billion = 1.0 mina)
+const feepayerKeysBase58: { privateKey: string; publicKey: string } =
+  JSON.parse(await fs.readFile(config.feepayerKeyPath, 'utf8'));
+const zkAppKeysBase58: { publicKey: string } = JSON.parse(
+  await fs.readFile(config.keyPath, 'utf8')
+);
+const feepayerKey = PrivateKey.fromBase58(feepayerKeysBase58.privateKey);
+const feepayerAddress =   PublicKey.fromBase58(feepayerKeysBase58.publicKey);
+const zkAppAddress = PublicKey.fromBase58(zkAppKeysBase58.publicKey);
+const zkApp = new PostsContract(zkAppAddress);
 
 const usersPostsCountersMap = new MerkleMap();
 const postsMap = new MerkleMap();
+
 
 console.log('Compiling Posts ZkProgram...');
 await Posts.compile();
@@ -64,17 +78,11 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
   // Check that content and signed CID match
   if (postCIDAsBigInt === postContentIDAsBigInt) {
 
-    const castedSignedData = {
-      signature: request.body.signedData.signature,
-      publicKey: request.body.signedData.publicKey,
-      data: request.body.signedData.data.map((value) => Field(value).toBigInt())
-    }
-
-    const isSigned = minaSigner.verifyFields(castedSignedData);
+    const isSigned = signature.verify(
+      posterAddress,
+      [CircuitString.fromString(postCID.toString()).hash()]
+    ).toBoolean();
     console.log(isSigned);
-
-    const isSigned2 = signature.verify(posterAddress, [CircuitString.fromString(postCID.toString()).hash()])
-    console.log('o1js signed: ' + isSigned2.toBoolean());
     
     // Check that the signature is valid
     if (isSigned) {
@@ -92,7 +100,7 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
       const userPostsCounter = Field(userPostsCID.length);
       console.log('userPostsCounter: ' + userPostsCounter.toBigInt());
 
-      const lastBlock = await fetchLastBlock('https://proxy.berkeley.minaexplorer.com/graphql');
+      const lastBlock = await fetchLastBlock(config.url);
       const postBlockHeight = Field(lastBlock.blockchainLength.toString());
 
       const postCIDAsCircuitString = CircuitString.fromString(postCID.toString());
@@ -119,7 +127,6 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
       postsMap.set(postKey, postState.hash());
       const latestPosts = postsMap.getRoot();
 
-      console.log('transition');
       try {
       const transition = PostsTransition.createPostPublishingTransition(
         signature,
@@ -133,7 +140,39 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
         postState,
         postWitness
       );
-      console.log(transition);
+      console.log('transition');
+      
+      const proof = await Posts.provePostPublishingTransition(
+        transition,
+        signature,
+        postState.allPostsCounter.sub(1),
+        initialUsersPostsCounters,
+        latestUsersPostsCounters,
+        postState.userPostsCounter.sub(1),
+        userPostsCounterWitness,
+        initialPosts,
+        latestPosts,
+        postState,
+        postWitness
+      );
+      console.log('proof');
+
+      let sentTxn;
+      try {
+        const txn = await Mina.transaction(
+          { sender: feepayerAddress, fee: fee },
+          () => {
+            zkApp.update(proof);
+          }
+        );
+        await txn.prove();
+        sentTxn = await txn.sign([feepayerKey]).send();
+      } catch (err) {
+        console.log(err);
+      }
+      if (sentTxn?.hash() !== undefined) {
+        console.log(`https://berkeley.minaexplorer.com/transaction/${sentTxn.hash()}`);
+      }
       } catch (e) {
         console.log(e);
       }

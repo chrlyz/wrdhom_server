@@ -20,7 +20,7 @@
     "fastify": "^4.24.3",
     "ipfs-car": "^1.0.0",
     "mina-signer": "^2.1.1",
-    "wrdhom": "^0.1.3"
+    "wrdhom": "^0.1.5"
   },
   "devDependencies": {
     "@types/node": "^20.9.0",
