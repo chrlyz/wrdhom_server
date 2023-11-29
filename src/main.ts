@@ -1,6 +1,6 @@
 import fastify from 'fastify';
 import { CircuitString, PublicKey, Signature, fetchLastBlock,
-  MerkleMap, Field, Poseidon, Mina, PrivateKey } from 'o1js';
+  MerkleMap, Field, Poseidon, Mina, PrivateKey, Proof } from 'o1js';
 import cors from '@fastify/cors';
 import { PrismaClient } from '@prisma/client';
 import { createFileEncoderStream, CAREncoderStream } from 'ipfs-car';
@@ -42,12 +42,13 @@ const zkApp = new PostsContract(zkAppAddress);
 const usersPostsCountersMap = new MerkleMap();
 const postsMap = new MerkleMap();
 
-
+/*
 console.log('Compiling Posts ZkProgram...');
 await Posts.compile();
 console.log('Compiling PostsContract...');
 await PostsContract.compile();
 console.log('Compiled');
+*/
 
 // ============================================================================
 
@@ -58,37 +59,28 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
   const signature = Signature.fromBase58(request.body.signedData.signature);
   const posterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
   const postContentIDAsBigInt = Field(request.body.signedData.data[0]).toBigInt();
-
   const file = new Blob([request.body.post]);
-  let postCID: any;
-  await createFileEncoderStream(file)
-  .pipeThrough(
-  new TransformStream({
-      transform(block, controller) {
-      postCID = block.cid;
-      controller.enqueue(block);
-      },
-  })
-  )
-  .pipeThrough(new CAREncoderStream())
-  .pipeTo(new WritableStream());
-
+  const postCID = await getCID(file);
+  console.log('postCID: ' + postCID);
   const postCIDAsBigInt = CircuitString.fromString(postCID.toString()).hash().toBigInt();
 
   // Check that content and signed CID match
-  if (postCIDAsBigInt === postContentIDAsBigInt) {
+  const isContentValid = postCIDAsBigInt === postContentIDAsBigInt;
+  console.log('Is Content Valid? ' + isContentValid);
+  if (isContentValid) {
 
     const isSigned = signature.verify(
       posterAddress,
       [CircuitString.fromString(postCID.toString()).hash()]
     ).toBoolean();
-    console.log(isSigned);
+    console.log('Is Signed? ' + isSigned);
     
     // Check that the signature is valid
     if (isSigned) {
 
-      const allPostsCounter = Field(await prisma.posts.count());
-      console.log('allPostsCounter: ' + allPostsCounter.toBigInt());
+      const allPostsCounter = (await prisma.posts.count()) + 1;
+      console.log('allPostsCounter: ' + allPostsCounter);
+
       const userPostsCID = await prisma.posts.findMany({
         where: {
           posterAddress: posterAddress.toBase58()
@@ -97,92 +89,17 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
           postContentID: true
         }
       });
-      const userPostsCounter = Field(userPostsCID.length);
-      console.log('userPostsCounter: ' + userPostsCounter.toBigInt());
+      const userPostsCounter = (userPostsCID.length) + 1;
+      console.log('userPostsCounter: ' + userPostsCounter);
 
-      const lastBlock = await fetchLastBlock(config.url);
-      const postBlockHeight = Field(lastBlock.blockchainLength.toString());
-
-      const postCIDAsCircuitString = CircuitString.fromString(postCID.toString());
-
-      const postState = new PostState({
-        posterAddress: posterAddress,
-        postContentID: postCIDAsCircuitString,
-        allPostsCounter: allPostsCounter.add(1),
-        userPostsCounter: userPostsCounter.add(1),
-        postBlockHeight: postBlockHeight,
-        deletionBlockHeight: Field(0),
-      });
-
-      const initialUsersPostsCounters = usersPostsCountersMap.getRoot();
-      const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
-      const userPostsCounterWitness = 
-        usersPostsCountersMap.getWitness(posterAddressAsField);
-      usersPostsCountersMap.set(posterAddressAsField, postState.userPostsCounter);
-      const latestUsersPostsCounters = usersPostsCountersMap.getRoot();
-
-      const initialPosts = postsMap.getRoot();
-      const postKey = Poseidon.hash([posterAddressAsField, postCIDAsCircuitString.hash()]);
-      const postWitness = postsMap.getWitness(postKey);
-      postsMap.set(postKey, postState.hash());
-      const latestPosts = postsMap.getRoot();
-
-      try {
-      const transition = PostsTransition.createPostPublishingTransition(
-        signature,
-        postState.allPostsCounter.sub(1),
-        initialUsersPostsCounters,
-        latestUsersPostsCounters,
-        postState.userPostsCounter.sub(1),
-        userPostsCounterWitness,
-        initialPosts,
-        latestPosts,
-        postState,
-        postWitness
-      );
-      console.log('transition');
-      
-      const proof = await Posts.provePostPublishingTransition(
-        transition,
-        signature,
-        postState.allPostsCounter.sub(1),
-        initialUsersPostsCounters,
-        latestUsersPostsCounters,
-        postState.userPostsCounter.sub(1),
-        userPostsCounterWitness,
-        initialPosts,
-        latestPosts,
-        postState,
-        postWitness
-      );
-      console.log('proof');
-
-      let sentTxn;
-      try {
-        const txn = await Mina.transaction(
-          { sender: feepayerAddress, fee: fee },
-          () => {
-            zkApp.update(proof);
-          }
-        );
-        await txn.prove();
-        sentTxn = await txn.sign([feepayerKey]).send();
-      } catch (err) {
-        console.log(err);
-      }
-      if (sentTxn?.hash() !== undefined) {
-        console.log(`https://berkeley.minaexplorer.com/transaction/${sentTxn.hash()}`);
-      }
-      } catch (e) {
-        console.log(e);
-      }
-
-      const uploadedFile = await web3storage.uploadFile(file);
-      await createSQLPost(postState, signature);
+      await web3storage.uploadFile(file);
+      await createSQLPost(signature, posterAddress, allPostsCounter, userPostsCounter, postCID);
       return request.body;
+
     } else {
         reply.code(401).send({error: `Post isn't signed`});
     }
+
   } else {
       reply.code(401).send({error: `Derived post CID, doesn't match signed post CID`});
   }
@@ -209,16 +126,115 @@ interface SignedPost {
 
 // ============================================================================
 
-const createSQLPost = async (postState: PostState, signature: Signature) => {
+const getCID = async (file: Blob) => {
+  let postCID: any;
+  await createFileEncoderStream(file)
+  .pipeThrough(
+  new TransformStream({
+      transform(block, controller) {
+      postCID = block.cid;
+      controller.enqueue(block);
+      },
+  })
+  )
+  .pipeThrough(new CAREncoderStream())
+  .pipeTo(new WritableStream());
+
+  return postCID;
+}
+
+// ============================================================================
+
+const createSQLPost = async (signature: Signature, posterAddress: PublicKey,
+  allPostsCounter: number, userPostsCounter: number, postCID: any) => {
 
   await prisma.posts.create({
     data: {
-      posterAddress: postState.posterAddress.toBase58(),
-      postContentID: postState.postContentID.toString(),
-      allPostsCounter: postState.allPostsCounter.toBigInt(),
-      userPostsCounter: postState.userPostsCounter.toBigInt(),
+      posterAddress: posterAddress.toBase58(),
+      postContentID: postCID.toString(),
+      allPostsCounter: allPostsCounter,
+      userPostsCounter: userPostsCounter,
       deletionBlockHeight: 0,
       minaSignature: signature.toBase58()
     }
   });
+}
+
+// ============================================================================
+
+const provePost = async (signature: Signature, posterAddress: PublicKey,
+  allPostsCounter: number, userPostsCounter: number,
+  postBlockHeight: bigint, postCID: any) => {
+
+  const postCIDAsCircuitString = CircuitString.fromString(postCID.toString());
+
+      const postState = new PostState({
+        posterAddress: posterAddress,
+        postContentID: postCIDAsCircuitString,
+        allPostsCounter: Field(allPostsCounter),
+        userPostsCounter: Field(userPostsCounter),
+        postBlockHeight: Field(postBlockHeight),
+        deletionBlockHeight: Field(0),
+      });
+
+      const initialUsersPostsCounters = usersPostsCountersMap.getRoot();
+      const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
+      const userPostsCounterWitness = 
+        usersPostsCountersMap.getWitness(posterAddressAsField);
+      usersPostsCountersMap.set(posterAddressAsField, postState.userPostsCounter);
+      const latestUsersPostsCounters = usersPostsCountersMap.getRoot();
+
+      const initialPosts = postsMap.getRoot();
+      const postKey = Poseidon.hash([posterAddressAsField, postCIDAsCircuitString.hash()]);
+      const postWitness = postsMap.getWitness(postKey);
+      postsMap.set(postKey, postState.hash());
+      const latestPosts = postsMap.getRoot();
+
+      const transition = PostsTransition.createPostPublishingTransition(
+        signature,
+        postState.allPostsCounter.sub(1),
+        initialUsersPostsCounters,
+        latestUsersPostsCounters,
+        postState.userPostsCounter.sub(1),
+        userPostsCounterWitness,
+        initialPosts,
+        latestPosts,
+        postState,
+        postWitness
+      );
+      console.log('Transition created');
+      
+      const proof = await Posts.provePostPublishingTransition(
+        transition,
+        signature,
+        postState.allPostsCounter.sub(1),
+        initialUsersPostsCounters,
+        latestUsersPostsCounters,
+        postState.userPostsCounter.sub(1),
+        userPostsCounterWitness,
+        initialPosts,
+        latestPosts,
+        postState,
+        postWitness
+      );
+      console.log('Proof created');
+
+}
+
+// ============================================================================
+
+const updateOnChainState = async (proof: Proof<PostsTransition, void>) => {
+  let sentTxn;
+  const txn = await Mina.transaction(
+    { sender: feepayerAddress, fee: fee },
+    () => {
+      zkApp.update(proof);
+    }
+  );
+  await txn.prove();
+  sentTxn = await txn.sign([feepayerKey]).send();
+
+  if (sentTxn?.hash() !== undefined) {
+    console.log(`https://berkeley.minaexplorer.com/transaction/${sentTxn.hash()}`);
+  }
 }
