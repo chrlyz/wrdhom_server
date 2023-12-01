@@ -15,7 +15,7 @@ model posts {
   postContentID       String
   allPostsCounter     BigInt
   userPostsCounter    BigInt
-  postBlockHeight     BigInt?
+  postBlockHeight     BigInt
   deletionBlockHeight BigInt
   minaSignature       String
 
