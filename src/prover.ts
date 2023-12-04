@@ -1,5 +1,5 @@
 import { CircuitString, PublicKey, Signature, fetchLastBlock,
-  MerkleMap, Field, Poseidon, Mina, PrivateKey, Proof } from 'o1js';
+  MerkleMap, Field, Poseidon, Mina, PrivateKey, Proof, fetchAccount } from 'o1js';
 import { PostState, PostsTransition, Posts, PostsContract, Config } from 'wrdhom';
 import fs from 'fs/promises';
 import { performance } from 'perf_hooks';
@@ -26,6 +26,9 @@ const zkAppKeysBase58: { publicKey: string } = JSON.parse(
 const feepayerKey = PrivateKey.fromBase58(feepayerKeysBase58.privateKey);
 const feepayerAddress =   PublicKey.fromBase58(feepayerKeysBase58.publicKey);
 const zkAppAddress = PublicKey.fromBase58(zkAppKeysBase58.publicKey);
+// Fetch accounts to make sure they are available on cache during the execution of the program
+await fetchAccount({ publicKey: zkAppKeysBase58.publicKey });
+await fetchAccount({ publicKey: feepayerKeysBase58.publicKey });
 const zkApp = new PostsContract(zkAppAddress);
 
 console.log('Compiling Posts ZkProgram...');
@@ -322,7 +325,7 @@ async function provePost(signature: Signature, posterAddress: PublicKey,
     sentTxn = await txn.sign([feepayerKey]).send();
   
     if (sentTxn?.hash() !== undefined) {
-      console.log(`https://berkeley.minaexplorer.com/transaction/${sentTxn.hash()}`);
+      console.log(`https://minascan.io/berkeley/tx/${sentTxn.hash()}`);
     }
 
     return sentTxn;
