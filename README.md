@@ -14,10 +14,16 @@ npm install
 npm run build
 ```
 
-### Start server
+### Start server to receive requests
 
 ``` console
-npm run start
+npm run service
+```
+
+### Start prover to update on-chain state based on valid requests
+
+``` console
+npm run prover
 ```
 
 ### License
