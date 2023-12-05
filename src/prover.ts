@@ -1,6 +1,8 @@
 import { CircuitString, PublicKey, Signature, fetchLastBlock,
-  MerkleMap, Field, Poseidon, Mina, PrivateKey, Proof, fetchAccount } from 'o1js';
-import { PostState, PostsTransition, Posts, PostsContract, Config } from 'wrdhom';
+  MerkleMap, Field, Poseidon, Mina, PrivateKey, Proof,
+  fetchAccount } from 'o1js';
+import { PostState, PostsTransition, Posts,
+  PostsContract, Config } from 'wrdhom';
 import fs from 'fs/promises';
 import { performance } from 'perf_hooks';
 import { PrismaClient } from '@prisma/client';
@@ -42,107 +44,108 @@ console.log('Compiled');
 let usersPostsCountersMap = new MerkleMap();
 let postsMap = new MerkleMap();
 
-while (true) {
-    usersPostsCountersMap = new MerkleMap();
-    postsMap = new MerkleMap();
-
-    const posts = await prisma.posts.findMany({
-        orderBy: {
-          allPostsCounter: 'asc'
-        },
-        where: {
-          postBlockHeight: {
-            not: 0
-          }
-        },
-        select: {
-          posterAddress: true,
-          postContentID: true,
-          allPostsCounter: true,
-          userPostsCounter: true,
-          postBlockHeight: true,
-          deletionBlockHeight: true
-        }
-    });
-    console.log('posts:');
-    console.log(posts)
-    
-    const posters = new Set(posts.map( post => post.posterAddress));
-    console.log('posters:');
-    console.log(posters);
-    
-    for (const poster of posters) {
-    const userPosts = await prisma.posts.findMany({
-        where: { posterAddress: poster,
-        postBlockHeight: {
-        not: 0
-        } },
-        select: { userPostsCounter: true }
-    });
-    console.log(userPosts);
-    console.log('Initial usersPostsCountersMap root: ' + usersPostsCountersMap.getRoot().toString());
-    usersPostsCountersMap.set(
-        Poseidon.hash(PublicKey.fromBase58(poster).toFields()),
-        Field(userPosts.length)
-    );
-    console.log(userPosts.length);
-    console.log('Latest usersPostsCountersMap root: ' + usersPostsCountersMap.getRoot().toString());
-    };
-    
-    posts.forEach( post => {
-    const posterAddress = PublicKey.fromBase58(post.posterAddress);
-    const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
-    const postContentID = CircuitString.fromString(post.postContentID);
-    const postState = new PostState({
-        posterAddress: posterAddress,
-        postContentID: postContentID,
-        allPostsCounter: Field(post.allPostsCounter),
-        userPostsCounter: Field(post.userPostsCounter),
-        postBlockHeight: Field(post.postBlockHeight),
-        deletionBlockHeight: Field(post.deletionBlockHeight),
-    });
-    console.log('Initial postsMap root: ' + postsMap.getRoot().toString());
-    postsMap.set(
-        Poseidon.hash([posterAddressAsField, postContentID.hash()]),
-        postState.hash()
-    );
-    console.log('Latest postsMap root: ' + postsMap.getRoot().toString());
-    });
-    
-    // Process pending posts to update on-chain state
-    
-    const pendingPosts = await prisma.posts.findMany({
-    take: 2,
-    orderBy: {
-        allPostsCounter: 'asc'
-    },
-    where: {
-        postBlockHeight: 0
+const posts = await prisma.posts.findMany({
+  orderBy: {
+    allPostsCounter: 'asc'
+  },
+  where: {
+    postBlockHeight: {
+      not: 0
     }
-    });
-    console.log('pendingPosts:');
-    console.log(pendingPosts);
-    
-    const startTime = performance.now();
-    
-    const lastBlock = await fetchLastBlock(config.url);
-    const postBlockHeight = lastBlock.blockchainLength.toBigint() + BigInt(1);
-    console.log(postBlockHeight);
-    
-    const transitionsAndProofs: {
+  },
+  select: {
+    posterAddress: true,
+    postContentID: true,
+    allPostsCounter: true,
+    userPostsCounter: true,
+    postBlockHeight: true,
+    deletionBlockHeight: true
+  }
+});
+console.log('posts:');
+console.log(posts)
+
+const posters = new Set(posts.map( post => post.posterAddress));
+console.log('posters:');
+console.log(posters);
+
+for (const poster of posters) {
+const userPosts = await prisma.posts.findMany({
+  where: { posterAddress: poster,
+  postBlockHeight: {
+  not: 0
+  } },
+  select: { userPostsCounter: true }
+});
+console.log(userPosts);
+console.log('Initial usersPostsCountersMap root: ' + usersPostsCountersMap.getRoot().toString());
+usersPostsCountersMap.set(
+  Poseidon.hash(PublicKey.fromBase58(poster).toFields()),
+  Field(userPosts.length)
+);
+console.log(userPosts.length);
+console.log('Latest usersPostsCountersMap root: ' + usersPostsCountersMap.getRoot().toString());
+};
+
+posts.forEach( post => {
+  const posterAddress = PublicKey.fromBase58(post.posterAddress);
+  const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
+  const postContentID = CircuitString.fromString(post.postContentID);
+  const postState = new PostState({
+    posterAddress: posterAddress,
+    postContentID: postContentID,
+    allPostsCounter: Field(post.allPostsCounter),
+    userPostsCounter: Field(post.userPostsCounter),
+    postBlockHeight: Field(post.postBlockHeight),
+    deletionBlockHeight: Field(post.deletionBlockHeight),
+  });
+  console.log('Initial postsMap root: ' + postsMap.getRoot().toString());
+  postsMap.set(
+    Poseidon.hash([posterAddressAsField, postContentID.hash()]),
+    postState.hash()
+  );
+  console.log('Latest postsMap root: ' + postsMap.getRoot().toString());
+});
+
+let numberOfPosts = posts.length;
+console.log('Original number of posts: ' + numberOfPosts);
+
+while (true) {
+  // Process pending posts to update on-chain state
+
+  const pendingPosts = await prisma.posts.findMany({
+  take: 2,
+  orderBy: {
+      allPostsCounter: 'asc'
+  },
+  where: {
+      postBlockHeight: 0
+  }
+  });
+  numberOfPosts += pendingPosts.length;
+  console.log('Number of posts if update is successful: ' + numberOfPosts);
+  console.log('pendingPosts:');
+  console.log(pendingPosts);
+
+  const startTime = performance.now();
+
+  const lastBlock = await fetchLastBlock(config.url);
+  const postBlockHeight = lastBlock.blockchainLength.toBigint();
+  console.log(postBlockHeight);
+
+  const transitionsAndProofs: {
     transition: PostsTransition,
     proof: Proof<PostsTransition, void>
-    }[] = [];
-    
-    for (const pPost of pendingPosts) {
+  }[] = [];
 
+  for (const pPost of pendingPosts) {
     const result = await provePost(Signature.fromBase58(pPost.minaSignature),
     PublicKey.fromBase58(pPost.posterAddress), pPost.allPostsCounter,
     pPost.userPostsCounter, postBlockHeight, pPost.postContentID);
     transitionsAndProofs.push(result);
-    }
-    
-    transitionsAndProofs.forEach(t => {
+  }
+
+  transitionsAndProofs.forEach(t => {
     console.log('initialAllPostsCounter: ' + t.transition.initialAllPostsCounter.toString());
     console.log('latestAllPostsCounter: ' + t.transition.latestAllPostsCounter.toString());
     console.log('initialUsersPostsCounters: ' + t.transition.initialUsersPostsCounters.toString());
@@ -150,7 +153,7 @@ while (true) {
     console.log('initialPosts: ' + t.transition.initialPosts.toString());
     console.log('latestPosts: ' + t.transition.latestPosts.toString());
     console.log('blockHeight: ' + t.transition.blockHeight.toString());
-    
+
     console.log('proof.initialAllPostsCounter: ' + t.proof.publicInput.initialAllPostsCounter.toString());
     console.log('proof.latestAllPostsCounter: ' + t.proof.publicInput.latestAllPostsCounter.toString());
     console.log('proof.initialUsersPostsCounters: ' + t.proof.publicInput.initialUsersPostsCounters.toString());
@@ -158,59 +161,99 @@ while (true) {
     console.log('proof.initialPosts: ' + t.proof.publicInput.initialPosts.toString());
     console.log('proof.latestPosts: ' + t.proof.publicInput.latestPosts.toString());
     console.log('proof.blockHeight: ' + t.proof.publicInput.blockHeight.toString());
-    });
-    
-    if (transitionsAndProofs.length !== 0) {
-        await updateOnChainState(transitionsAndProofs);
+  });
 
-        let tries = 0;
-        const maxTries = 15;
-        let allPostsCounterFetch;
-        let usersPostsCountersFetch;
-        let postsFetch;
-        while (tries < maxTries) {
-            console.log('Pause to give time for the transaction to confirm...');
-            await delay(60000);
-        
-            allPostsCounterFetch = await zkApp.allPostsCounter.fetch();
-            console.log('allPostsCounterFetch: ' + allPostsCounterFetch?.toString());
-            usersPostsCountersFetch = await zkApp.usersPostsCounters.fetch();
-            console.log('usersPostsCountersFetch: ' + usersPostsCountersFetch?.toString());
-            postsFetch = await zkApp.posts.fetch();
-            console.log('postsFetch: ' + postsFetch?.toString());
-    
-            console.log(Field(posts.length + pendingPosts.length).toString());
-            console.log(usersPostsCountersMap.getRoot().toString());
-            console.log(postsMap.getRoot().toString());
-    
-            console.log(allPostsCounterFetch?.equals(Field(posts.length + pendingPosts.length)).toBoolean());
-            console.log(usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean());
-            console.log(postsFetch?.equals(postsMap.getRoot()).toBoolean());
-    
-            if (allPostsCounterFetch?.equals(Field(posts.length + pendingPosts.length)).toBoolean()
-            && usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean()
-            && postsFetch?.equals(postsMap.getRoot()).toBoolean()) {
-                for (const pPost of pendingPosts) {
-                    await prisma.posts.update({
-                        where: {
-                            posterAddress_postContentID: {
-                                posterAddress: pPost.posterAddress,
-                                postContentID: pPost.postContentID
-                            }
-                        },
-                        data: {
-                            postBlockHeight: postBlockHeight
-                        }
-                    });
-                }
-                tries = maxTries;
-            }
-            tries++;
-        }
-    }
-    
+  if (transitionsAndProofs.length !== 0) {
+    const sentTxn = await updateOnChainState(transitionsAndProofs);
+
     const endTime = performance.now();
     console.log(`${(endTime - startTime)/1000/60} minutes`);
+
+    let tries = 0;
+    const maxTries = 15;
+    let allPostsCounterFetch;
+    let usersPostsCountersFetch;
+    let postsFetch;
+    while (tries < maxTries) {
+      console.log('Pause to wait for the transaction to confirm...');
+      await delay(60000);
+
+      allPostsCounterFetch = await zkApp.allPostsCounter.fetch();
+      console.log('allPostsCounterFetch: ' + allPostsCounterFetch?.toString());
+      usersPostsCountersFetch = await zkApp.usersPostsCounters.fetch();
+      console.log('usersPostsCountersFetch: ' + usersPostsCountersFetch?.toString());
+      postsFetch = await zkApp.posts.fetch();
+      console.log('postsFetch: ' + postsFetch?.toString());
+
+      console.log(Field(numberOfPosts).toString());
+      console.log(usersPostsCountersMap.getRoot().toString());
+      console.log(postsMap.getRoot().toString());
+
+      console.log(allPostsCounterFetch?.equals(Field(numberOfPosts)).toBoolean());
+      console.log(usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean());
+      console.log(postsFetch?.equals(postsMap.getRoot()).toBoolean());
+
+      if (allPostsCounterFetch?.equals(Field(numberOfPosts)).toBoolean()
+      && usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean()
+      && postsFetch?.equals(postsMap.getRoot()).toBoolean()) {
+        for (const pPost of pendingPosts) {
+          await prisma.posts.update({
+              where: {
+                posterAddress_postContentID: {
+                    posterAddress: pPost.posterAddress,
+                    postContentID: pPost.postContentID
+                }
+              },
+              data: {
+                postBlockHeight: postBlockHeight
+              }
+          });
+        }
+        tries = maxTries;
+      }
+      // Reset initial state if transaction appears to have failed
+      if (tries === maxTries - 1) {
+        numberOfPosts -= pendingPosts.length;
+        console.log('Original number of posts: ' + numberOfPosts);
+
+        const pendingPosters = new Set(pendingPosts.map( post => post.posterAddress));
+        for (const poster of pendingPosters) {
+          const userPosts = await prisma.posts.findMany({
+            where: { posterAddress: poster,
+              postBlockHeight: {
+                not: 0
+              }
+            },
+            select: { userPostsCounter: true }
+          });
+          console.log(userPosts);
+          console.log('Initial usersPostsCountersMap root: ' + usersPostsCountersMap.getRoot().toString());
+          usersPostsCountersMap.set(
+            Poseidon.hash(PublicKey.fromBase58(poster).toFields()),
+            Field(userPosts.length)
+          );
+          console.log(userPosts.length);
+          console.log('Latest usersPostsCountersMap root: ' + usersPostsCountersMap.getRoot().toString());
+
+          pendingPosts.forEach( pPost => {
+            const posterAddress = PublicKey.fromBase58(pPost.posterAddress);
+            const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
+            const postContentID = CircuitString.fromString(pPost.postContentID);
+            console.log('Initial postsMap root: ' + postsMap.getRoot().toString());
+            postsMap.set(
+                Poseidon.hash([posterAddressAsField, postContentID.hash()]),
+                Field(0)
+            );
+            console.log('Latest postsMap root: ' + postsMap.getRoot().toString());
+          });
+        };
+      }
+      tries++;
+    }
+  } else {
+    console.log('Pause to wait for new posts before running loop again...');
+    await delay(60000);
+  }
 }
 
 // ============================================================================

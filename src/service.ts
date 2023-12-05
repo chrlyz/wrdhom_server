@@ -63,7 +63,6 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
     
     // Check that the signature is valid
     if (isSigned) {
-
       const allPostsCounter = (await prisma.posts.count()) + 1;
       console.log('allPostsCounter: ' + allPostsCounter);
 
@@ -81,11 +80,9 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
       await web3storage.uploadFile(file);
       await createSQLPost(signature, posterAddress, allPostsCounter, userPostsCounter, postCID);
       return request.body;
-
     } else {
         reply.code(401).send({error: `Post isn't signed`});
     }
-
   } else {
       reply.code(401).send({error: `Derived post CID, doesn't match signed post CID`});
   }
