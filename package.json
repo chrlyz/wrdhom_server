@@ -17,11 +17,12 @@
     "@fastify/cors": "^8.4.1",
     "@prisma/client": "^5.6.0",
     "@web-std/file": "^3.0.3",
-    "@web3-storage/w3up-client": "^11.2.0",
+    "@web3-storage/w3up-client": "^11.2.1",
+    "bullmq": "^4.15.2",
     "fastify": "^4.24.3",
     "ipfs-car": "^1.0.0",
     "mina-signer": "^2.1.1",
-    "wrdhom": "^0.1.5"
+    "wrdhom": "^0.1.7"
   },
   "devDependencies": {
     "@types/node": "^20.9.0",

@@ -131,6 +131,7 @@ const createSQLPost = async (signature: Signature, posterAddress: PublicKey,
       userPostsCounter: userPostsCounter,
       postBlockHeight: 0,
       deletionBlockHeight: 0,
+      restorationBlockHeight: 0,
       minaSignature: signature.toBase58()
     }
   });
