@@ -115,6 +115,17 @@ posts.forEach( post => {
 let numberOfPosts = posts.length;
 console.log('Original number of posts: ' + numberOfPosts);
 
+// Initialize queues and workers
+
+const connection = {
+  host: '127.0.0.1',
+  port: 6379
+}
+const postsQueue = new Queue('posts', {connection});
+const queueEvents = new QueueEvents('posts', {connection});
+new Worker('posts', jobPath , {connection, concurrency: 1});
+new Worker('posts', jobPath , {connection, concurrency: 1});
+
 while (true) {
   // Process pending posts to update on-chain state
 
@@ -133,14 +144,6 @@ while (true) {
   console.log(pendingPosts);
 
   startTime = performance.now();
-
-  const connection = {
-    host: '127.0.0.1',
-    port: 6379
-  }
-
-  const postsQueue = new Queue('posts', {connection});
-  const queueEvents = new QueueEvents('posts', {connection});
 
   const lastBlock = await fetchLastBlock(config.url);
   const postBlockHeight = lastBlock.blockchainLength.toBigint();
@@ -214,8 +217,6 @@ while (true) {
       { provePostInput: provePostInput }
     );
     jobsPromises.push(job.waitUntilFinished(queueEvents));
-
-    const worker = new Worker('posts', jobPath , {connection, concurrency: 1});
   }
 
   const transitionsAndProofsS: {
