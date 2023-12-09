@@ -6,7 +6,6 @@ import { PostState, PostsTransition, Posts,
 import fs from 'fs/promises';
 import { performance } from 'perf_hooks';
 import { PrismaClient } from '@prisma/client';
-import { Queue, Worker, QueueEvents } from 'bullmq';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -39,7 +38,6 @@ const zkApp = new PostsContract(zkAppAddress);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const cachePath = join(__dirname, '..', '/cache/');
-const jobPath = join(__dirname, 'proverJob.js');
 
 let startTime = performance.now();
 console.log('Compiling Posts ZkProgram...');
@@ -115,17 +113,6 @@ posts.forEach( post => {
 let numberOfPosts = posts.length;
 console.log('Original number of posts: ' + numberOfPosts);
 
-// Initialize queues and workers
-
-const connection = {
-  host: '127.0.0.1',
-  port: 6379
-}
-const postsQueue = new Queue('posts', {connection});
-const queueEvents = new QueueEvents('posts', {connection});
-new Worker('posts', jobPath , {connection, concurrency: 1});
-new Worker('posts', jobPath , {connection, concurrency: 1});
-
 while (true) {
   // Process pending posts to update on-chain state
 
@@ -149,92 +136,25 @@ while (true) {
   const postBlockHeight = lastBlock.blockchainLength.toBigint();
   console.log(postBlockHeight);
 
-  const provePostInputs: {
-    signature: string,
-    transition: string,
-    postState: string,
-    userPostsCounterWitness: string,
-    postWitness: string,
-    cachePath: string
-  }[] = [];
-
-  for (const pPost of pendingPosts) {
-    const signature = Signature.fromBase58(pPost.minaSignature);
-    const postCIDAsCircuitString = CircuitString.fromString(pPost.postContentID.toString());
-  
-    const postState = new PostState({
-      posterAddress: PublicKey.fromBase58(pPost.posterAddress),
-      postContentID: postCIDAsCircuitString,
-      allPostsCounter: Field(pPost.allPostsCounter),
-      userPostsCounter: Field(pPost.userPostsCounter),
-      postBlockHeight: Field(postBlockHeight),
-      deletionBlockHeight: Field(pPost.deletionBlockHeight),
-      restorationBlockHeight: Field(pPost.restorationBlockHeight)
-    });
-
-    const initialUsersPostsCounters = usersPostsCountersMap.getRoot();
-    const posterAddressAsField = Poseidon.hash(postState.posterAddress.toFields());
-    const userPostsCounterWitness = 
-      usersPostsCountersMap.getWitness(posterAddressAsField);
-    usersPostsCountersMap.set(posterAddressAsField, postState.userPostsCounter);
-    const latestUsersPostsCounters = usersPostsCountersMap.getRoot();
-
-    const initialPosts = postsMap.getRoot();
-    const postKey = Poseidon.hash([posterAddressAsField, postCIDAsCircuitString.hash()]);
-    const postWitness = postsMap.getWitness(postKey);
-    postsMap.set(postKey, postState.hash());
-    const latestPosts = postsMap.getRoot();
-
-    const transition = PostsTransition.createPostPublishingTransition(
-      signature,
-      postState.allPostsCounter.sub(1),
-      initialUsersPostsCounters,
-      latestUsersPostsCounters,
-      postState.userPostsCounter.sub(1),
-      userPostsCounterWitness,
-      initialPosts,
-      latestPosts,
-      postState,
-      postWitness
-    );
-    console.log('Transition created');
-
-    provePostInputs.push({
-      signature: pPost.minaSignature,
-      transition: JSON.stringify(transition),
-      postState: JSON.stringify(postState),
-      userPostsCounterWitness: JSON.stringify(userPostsCounterWitness.toJSON()),
-      postWitness: JSON.stringify(postWitness.toJSON()),
-      cachePath: cachePath
-    });
-  }
-
-  const jobsPromises: Promise<any>[] = [];
-
-  for (const provePostInput of provePostInputs) {
-    const job = await postsQueue.add(
-      `job`,
-      { provePostInput: provePostInput }
-    );
-    jobsPromises.push(job.waitUntilFinished(queueEvents));
-  }
-
-  const transitionsAndProofsS: {
-    transition: string;
-    proof: string;
-  }[] = await Promise.all(jobsPromises);
-
   const transitionsAndProofs: {
     transition: PostsTransition,
     proof: PostsProof
   }[] = [];
 
-  transitionsAndProofsS.forEach(transitionAndProofS => {
-    transitionsAndProofs.push({
-      transition: PostsTransition.fromJSON(JSON.parse(transitionAndProofS.transition)),
-      proof: PostsProof.fromJSON(JSON.parse(transitionAndProofS.proof))
-    });
-  });
+  for (const pPost of pendingPosts) {
+    const result = await provePost(
+      pPost.minaSignature,
+      pPost.posterAddress,
+      pPost.postContentID,
+      pPost.allPostsCounter,
+      pPost.userPostsCounter,
+      postBlockHeight,
+      pPost.deletionBlockHeight,
+      pPost.restorationBlockHeight
+    );
+
+    transitionsAndProofs.push(result);
+  }
 
   if (transitionsAndProofs.length !== 0) {
     await updateOnChainState(transitionsAndProofs);
@@ -327,6 +247,71 @@ while (true) {
     console.log('Pause to wait for new posts before running loop again...');
     await delay(60000);
   }
+}
+
+// ============================================================================
+
+async function provePost(signatureBase58: string, posterAddressBase58: string,
+  postCID: string, allPostsCounter: bigint, userPostsCounter: bigint,
+  postBlockHeight: bigint, deletionBlockHeight: bigint, restorationBlockHeight: bigint) {
+
+  const signature = Signature.fromBase58(signatureBase58);
+  const posterAddress = PublicKey.fromBase58(posterAddressBase58);
+  const postCIDAsCircuitString = CircuitString.fromString(postCID.toString());
+
+      const postState = new PostState({
+        posterAddress: posterAddress,
+        postContentID: postCIDAsCircuitString,
+        allPostsCounter: Field(allPostsCounter),
+        userPostsCounter: Field(userPostsCounter),
+        postBlockHeight: Field(postBlockHeight),
+        deletionBlockHeight: Field(deletionBlockHeight),
+        restorationBlockHeight: Field(restorationBlockHeight)
+      });
+
+      const initialUsersPostsCounters = usersPostsCountersMap.getRoot();
+      const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
+      const userPostsCounterWitness = 
+        usersPostsCountersMap.getWitness(posterAddressAsField);
+      usersPostsCountersMap.set(posterAddressAsField, postState.userPostsCounter);
+      const latestUsersPostsCounters = usersPostsCountersMap.getRoot();
+
+      const initialPosts = postsMap.getRoot();
+      const postKey = Poseidon.hash([posterAddressAsField, postCIDAsCircuitString.hash()]);
+      const postWitness = postsMap.getWitness(postKey);
+      postsMap.set(postKey, postState.hash());
+      const latestPosts = postsMap.getRoot();
+
+      const transition = PostsTransition.createPostPublishingTransition(
+        signature,
+        postState.allPostsCounter.sub(1),
+        initialUsersPostsCounters,
+        latestUsersPostsCounters,
+        postState.userPostsCounter.sub(1),
+        userPostsCounterWitness,
+        initialPosts,
+        latestPosts,
+        postState,
+        postWitness
+      );
+      console.log('Transition created');
+      
+      const proof = await Posts.provePostPublishingTransition(
+        transition,
+        signature,
+        postState.allPostsCounter.sub(1),
+        initialUsersPostsCounters,
+        latestUsersPostsCounters,
+        postState.userPostsCounter.sub(1),
+        userPostsCounterWitness,
+        initialPosts,
+        latestPosts,
+        postState,
+        postWitness
+      );
+      console.log('Proof created');
+
+      return {transition: transition, proof: proof};
 }
   
 // ============================================================================
