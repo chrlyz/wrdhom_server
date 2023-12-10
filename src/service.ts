@@ -5,8 +5,13 @@ import { PrismaClient } from '@prisma/client';
 import { createFileEncoderStream, CAREncoderStream } from 'ipfs-car';
 import { Blob } from '@web-std/file';
 import { create } from '@web3-storage/w3up-client';
+import * as dotenv from 'dotenv';
 
 // ============================================================================
+
+// Load .env
+
+dotenv.config();
 
 // Set up client for PostgreSQL for structured data
 
@@ -15,9 +20,9 @@ const prisma = new PrismaClient();
 // Set up client for IPFS for unstructured data
 
 const web3storage = await create();
-console.log('Logging-in to web3.storage...');
-await web3storage.login('chrlyz@skiff.com');
-await web3storage.setCurrentSpace('did:key:z6Mkj6kybvJKUYQNCGvg7vKPayZdn272rPLsVQzF8oDAV8B7');
+console.log('---Logging-in to web3.storage...');
+await web3storage.login(process.env.W3S_EMAIL as `${string}@${string}`);
+await web3storage.setCurrentSpace(process.env.W3S_SPACE as `did:${string}:${string}`);
 
 // ============================================================================
 
