@@ -76,8 +76,8 @@ while (true) {
       postBlockHeight: 0
   }
   });
-  numberOfPosts += pendingPosts.length;
-  console.log('Number of posts if update is successful: ' + numberOfPosts);
+  context.numberOfPosts += pendingPosts.length;
+  console.log('Number of posts if update is successful: ' + context.numberOfPosts);
   console.log('pendingPosts:');
   console.log(pendingPosts);
 
@@ -129,15 +129,15 @@ while (true) {
       postsFetch = await zkApp.posts.fetch();
       console.log('postsFetch: ' + postsFetch?.toString());
 
-      console.log(Field(numberOfPosts).toString());
+      console.log(Field(context.numberOfPosts).toString());
       console.log(usersPostsCountersMap.getRoot().toString());
       console.log(postsMap.getRoot().toString());
 
-      console.log(allPostsCounterFetch?.equals(Field(numberOfPosts)).toBoolean());
+      console.log(allPostsCounterFetch?.equals(Field(context.numberOfPosts)).toBoolean());
       console.log(usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean());
       console.log(postsFetch?.equals(postsMap.getRoot()).toBoolean());
 
-      if (allPostsCounterFetch?.equals(Field(numberOfPosts)).toBoolean()
+      if (allPostsCounterFetch?.equals(Field(context.numberOfPosts)).toBoolean()
       && usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean()
       && postsFetch?.equals(postsMap.getRoot()).toBoolean()) {
         for (const pPost of pendingPosts) {
@@ -157,8 +157,8 @@ while (true) {
       }
       // Reset initial state if transaction appears to have failed
       if (tries === maxTries - 1) {
-        numberOfPosts -= pendingPosts.length;
-        console.log('Original number of posts: ' + numberOfPosts);
+        context.numberOfPosts -= pendingPosts.length;
+        console.log('Original number of posts: ' + context.numberOfPosts);
 
         const pendingPosters = new Set(pendingPosts.map( post => post.posterAddress));
         for (const poster of pendingPosters) {
