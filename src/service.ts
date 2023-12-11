@@ -18,12 +18,12 @@ dotenv.config();
 const prisma = new PrismaClient();
 
 // Set up client for IPFS for unstructured data
-
+/*
 const web3storage = await create();
 console.log('---Logging-in to web3.storage...');
 await web3storage.login(process.env.W3S_EMAIL as `${string}@${string}`);
 await web3storage.setCurrentSpace(process.env.W3S_SPACE as `did:${string}:${string}`);
-
+*/
 // ============================================================================
 
 // Instantiate Fastify server and set up configurations
@@ -46,6 +46,7 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
 
   console.log(request.body.signedData);
 
+  // Check that content and signed CID match
   const signature = Signature.fromBase58(request.body.signedData.signature);
   const posterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
   const postContentIDAsBigInt = Field(request.body.signedData.data[0]).toBigInt();
@@ -54,19 +55,18 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
   const postCID = await getCID(file);
   console.log('postCID: ' + postCID);
   const postCIDAsBigInt = CircuitString.fromString(postCID.toString()).hash().toBigInt();
-
-  // Check that content and signed CID match
   const isContentValid = postCIDAsBigInt === postContentIDAsBigInt;
   console.log('Is Content Valid? ' + isContentValid);
+
   if (isContentValid) {
 
+    // Check that the signature is valid
     const isSigned = signature.verify(
       posterAddress,
       [CircuitString.fromString(postCID.toString()).hash()]
     ).toBoolean();
     console.log('Is Signed? ' + isSigned);
     
-    // Check that the signature is valid
     if (isSigned) {
       const allPostsCounter = (await prisma.posts.count()) + 1;
       console.log('allPostsCounter: ' + allPostsCounter);
@@ -82,14 +82,14 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
       const userPostsCounter = (userPostsCID.length) + 1;
       console.log('userPostsCounter: ' + userPostsCounter);
 
-      await web3storage.uploadFile(file);
+      //await web3storage.uploadFile(file);
       await createSQLPost(signature, posterAddress, allPostsCounter, userPostsCounter, postCID);
       return request.body;
     } else {
-        reply.code(401).send({error: `Post isn't signed`});
+        return `Post isn't signed`;
     }
   } else {
-      reply.code(401).send({error: `Derived post CID, doesn't match signed post CID`});
+      return `Derived post CID, doesn't match signed post CID`;
   }
 });
 
