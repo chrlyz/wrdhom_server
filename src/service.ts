@@ -1,11 +1,12 @@
 import fastify from 'fastify';
-import { CircuitString, PublicKey, Signature, Field } from 'o1js';
+import { CircuitString, PublicKey, Signature, Field, MerkleMap, Poseidon } from 'o1js';
 import cors from '@fastify/cors';
 import { PrismaClient } from '@prisma/client';
 import { createFileEncoderStream, CAREncoderStream } from 'ipfs-car';
 import { Blob } from '@web-std/file';
 import { create } from '@web3-storage/w3up-client';
 import * as dotenv from 'dotenv';
+import { regenerateZkAppState } from './utils/state.js';
 
 // ============================================================================
 
@@ -18,12 +19,29 @@ dotenv.config();
 const prisma = new PrismaClient();
 
 // Set up client for IPFS for unstructured data
-/*
+
 const web3storage = await create();
-console.log('---Logging-in to web3.storage...');
+console.log('Logging-in to web3.storage...');
 await web3storage.login(process.env.W3S_EMAIL as `${string}@${string}`);
 await web3storage.setCurrentSpace(process.env.W3S_SPACE as `did:${string}:${string}`);
-*/
+
+// ============================================================================
+
+// Regenerate Merkle maps from database
+
+const usersPostsCountersMap = new MerkleMap();
+const postsMap = new MerkleMap();
+let numberOfPosts = 0;
+
+const context = {
+  prisma: prisma,
+  usersPostsCountersMap: usersPostsCountersMap,
+  postsMap: postsMap,
+  numberOfPosts: numberOfPosts
+}
+
+await regenerateZkAppState(context);
+
 // ============================================================================
 
 // Instantiate Fastify server and set up configurations
@@ -41,6 +59,8 @@ server.listen({ port: 3001 }, (err, address) => {
   }
   console.log(`Server listening at ${address}`)
 });
+
+// ============================================================================
 
 server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
 
@@ -82,7 +102,7 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
       const userPostsCounter = (userPostsCID.length) + 1;
       console.log('userPostsCounter: ' + userPostsCounter);
 
-      //await web3storage.uploadFile(file);
+      await web3storage.uploadFile(file);
       await createSQLPost(signature, posterAddress, allPostsCounter, userPostsCounter, postCID);
       return request.body;
     } else {
@@ -95,6 +115,52 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
 
 // ============================================================================
 
+server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
+  try {
+    const { howMany } = request.query;
+    const posts = await prisma.posts.findMany({
+      take: Number(howMany),
+      orderBy: {
+        allPostsCounter: 'desc'
+      },
+      where: {
+        postBlockHeight: {
+          not: 0
+        }
+      }
+    });
+
+    const postsResponse: {
+      posterAddress: string,
+      postContentID: string,
+      content: string
+    }[] = [];
+
+    for (const post of posts) {
+      const posterAddressAsField = Poseidon.hash(PublicKey.fromBase58(post.posterAddress).toFields());
+      const postContentIDAsCircuitString = CircuitString.fromString(post.postContentID);
+      const postKey = Poseidon.hash([posterAddressAsField, postContentIDAsCircuitString.hash()]);
+      //const postWitness = postsMap.getWitness(postKey);
+      const contentResponse = await fetch('https://' + post.postContentID + '.ipfs.w3s.link');
+      const content = await contentResponse.text();
+
+      postsResponse.push({
+        posterAddress: post.posterAddress,
+        postContentID: post.postContentID,
+        content: content
+      })
+    };
+
+    console.log(postsResponse);
+
+    return postsResponse;
+  } catch(e) {
+      console.log(e);
+  }
+});
+
+// ============================================================================
+
 interface SignedPost {
   post: string,
   signedData: {
@@ -102,6 +168,12 @@ interface SignedPost {
     publicKey: string,
     data: string[]
   }
+}
+
+// ============================================================================
+
+interface PostsQuery {
+  howMany: number,
 }
 
 // ============================================================================
