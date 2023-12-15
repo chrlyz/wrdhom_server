@@ -7,6 +7,7 @@ import { Blob } from '@web-std/file';
 import { create } from '@web3-storage/w3up-client';
 import * as dotenv from 'dotenv';
 import { regenerateZkAppState } from './utils/state.js';
+import { PostState } from 'wrdhom';
 
 // ============================================================================
 
@@ -131,23 +132,36 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
     });
 
     const postsResponse: {
-      posterAddress: string,
+      postState: string,
       postContentID: string,
-      content: string
+      content: string,
+      postWitness: JSON
     }[] = [];
 
     for (const post of posts) {
-      const posterAddressAsField = Poseidon.hash(PublicKey.fromBase58(post.posterAddress).toFields());
-      const postContentIDAsCircuitString = CircuitString.fromString(post.postContentID);
-      const postKey = Poseidon.hash([posterAddressAsField, postContentIDAsCircuitString.hash()]);
-      //const postWitness = postsMap.getWitness(postKey);
+      const posterAddress = PublicKey.fromBase58(post.posterAddress);
+      const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
+      const postContentID = CircuitString.fromString(post.postContentID);
+      const postKey = Poseidon.hash([posterAddressAsField, postContentID.hash()]);
+      const postWitness = postsMap.getWitness(postKey).toJSON();
       const contentResponse = await fetch('https://' + post.postContentID + '.ipfs.w3s.link');
       const content = await contentResponse.text();
 
+      const postState = new PostState({
+        posterAddress: posterAddress,
+        postContentID: postContentID,
+        allPostsCounter: Field(post.allPostsCounter),
+        userPostsCounter: Field(post.userPostsCounter),
+        postBlockHeight: Field(post.postBlockHeight),
+        deletionBlockHeight: Field(post.deletionBlockHeight),
+        restorationBlockHeight: Field(post.restorationBlockHeight)
+      });
+
       postsResponse.push({
-        posterAddress: post.posterAddress,
+        postState: JSON.stringify(postState),
         postContentID: post.postContentID,
-        content: content
+        content: content,
+        postWitness: postWitness
       })
     };
 
