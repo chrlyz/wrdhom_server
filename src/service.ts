@@ -49,8 +49,7 @@ await regenerateZkAppState(context);
 
 const server = fastify();
 await server.register(cors, { 
-  origin: 'http://localhost:3000',
-  methods: ['POST']
+  origin: '*',
 });
 
 server.listen({ port: 3001 }, (err, address) => {
