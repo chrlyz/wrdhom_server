@@ -10,6 +10,9 @@ build
 /keys
 config.json
 
+# Content
+/posts
+
 # Editor
 .vscode
 

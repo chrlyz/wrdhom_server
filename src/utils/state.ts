@@ -70,6 +70,8 @@ export async function regenerateZkAppState(context: {
     
     context.numberOfPosts = posts.length;
     console.log('Original number of posts: ' + context.numberOfPosts);
+
+    return posts;
 }
 
 // ============================================================================
