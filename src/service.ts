@@ -8,6 +8,7 @@ import { create } from '@web3-storage/w3up-client';
 import * as dotenv from 'dotenv';
 import { regenerateZkAppState } from './utils/state.js';
 import { PostState } from 'wrdhom';
+import fs from 'fs/promises';
 
 // ============================================================================
 
@@ -41,7 +42,23 @@ const context = {
   numberOfPosts: numberOfPosts
 }
 
-await regenerateZkAppState(context);
+const posts = await regenerateZkAppState(context);
+
+// Get posts content and keep it locally for faster reponses
+
+for (const post of posts) {
+  try {
+    await fs.readFile('./posts/' + post.postContentID, 'utf8');
+  } catch (e: any) {
+      if (e.code === 'ENOENT') {
+        const contentResponse = await fetch('https://' + post.postContentID + '.ipfs.w3s.link');
+        const content = await contentResponse.text();
+        await fs.writeFile('./posts/' + post.postContentID, content, 'utf-8');
+      } else {
+          console.error(e);
+      }
+  }
+};
 
 // ============================================================================
 
@@ -143,8 +160,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       const postContentID = CircuitString.fromString(post.postContentID);
       const postKey = Poseidon.hash([posterAddressAsField, postContentID.hash()]);
       const postWitness = postsMap.getWitness(postKey).toJSON();
-      const contentResponse = await fetch('https://' + post.postContentID + '.ipfs.w3s.link');
-      const content = await contentResponse.text();
+      const content = await fs.readFile('./posts/' + post.postContentID, 'utf8');
 
       const postState = new PostState({
         posterAddress: posterAddress,
@@ -168,7 +184,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
 
     return postsResponse;
   } catch(e) {
-      console.log(e);
+      console.error(e);
   }
 });
 
