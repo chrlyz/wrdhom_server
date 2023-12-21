@@ -9,6 +9,8 @@ import * as dotenv from 'dotenv';
 import { regenerateZkAppState } from './utils/state.js';
 import { PostState } from 'wrdhom';
 import fs from 'fs/promises';
+import { fastifySchedule } from '@fastify/schedule';
+import { SimpleIntervalJob, AsyncTask } from 'toad-scheduler';
 
 // ============================================================================
 
@@ -68,6 +70,60 @@ const server = fastify();
 await server.register(cors, { 
   origin: '*',
 });
+
+// Schedule periodical synchronization with zkApp state
+
+const syncStateTask = new AsyncTask(
+  'Sync with zkApp state',
+  async () => {
+    const pendingPosts = await prisma.posts.findMany({
+      orderBy: {
+        allPostsCounter: 'asc'
+      },
+      where: {
+        allPostsCounter: {
+          gt: context.numberOfPosts
+        },
+        postBlockHeight: {
+          not: 0
+        }
+      }
+    });
+    for (const pPost of pendingPosts) {
+      const contentResponse = await fetch('https://' + pPost.postContentID + '.ipfs.w3s.link');
+      const content = await contentResponse.text();
+      await fs.writeFile('./posts/' + pPost.postContentID, content, 'utf-8');
+
+      console.log(pPost);
+      const postState = new PostState({
+        posterAddress: PublicKey.fromBase58(pPost.posterAddress),
+        postContentID: CircuitString.fromString(pPost.postContentID),
+        allPostsCounter: Field(pPost.allPostsCounter),
+        userPostsCounter: Field(pPost.userPostsCounter),
+        postBlockHeight: Field(pPost.postBlockHeight),
+        deletionBlockHeight: Field(pPost.deletionBlockHeight),
+        restorationBlockHeight: Field(pPost.restorationBlockHeight)
+      });
+
+      const postKey = Poseidon.hash([
+        Poseidon.hash(postState.posterAddress.toFields()),
+        postState.postContentID.hash()
+      ]);
+
+      postsMap.set(postKey, postState.hash());
+      context.numberOfPosts += 1;
+    }
+  },
+  (e) => {console.error(e)}
+)
+const syncStateJob = new SimpleIntervalJob({ seconds: 20, }, syncStateTask)
+
+server.register(fastifySchedule);
+server.ready().then(() => {
+  server.scheduler.addSimpleIntervalJob(syncStateJob)
+});
+
+// Listen to port 3001
 
 server.listen({ port: 3001 }, (err, address) => {
   if (err) {
