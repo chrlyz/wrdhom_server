@@ -15,6 +15,7 @@
   "dependencies": {
     "@aurowallet/mina-provider": "^1.0.0",
     "@fastify/cors": "^8.4.1",
+    "@fastify/schedule": "^4.1.1",
     "@prisma/client": "^5.6.0",
     "@web-std/file": "^3.0.3",
     "@web3-storage/w3up-client": "^11.2.1",
@@ -22,6 +23,7 @@
     "fastify": "^4.24.3",
     "ipfs-car": "^1.0.0",
     "mina-signer": "^2.1.1",
+    "toad-scheduler": "^3.0.0",
     "wrdhom": "^0.1.8"
   },
   "devDependencies": {

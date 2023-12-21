@@ -114,13 +114,13 @@ while (true) {
     console.log(`${(endTime - startTime)/1000/60} minutes`);
 
     let tries = 0;
-    const maxTries = 15;
+    const maxTries = 50;
     let allPostsCounterFetch;
     let usersPostsCountersFetch;
     let postsFetch;
     while (tries < maxTries) {
       console.log('Pause to wait for the transaction to confirm...');
-      await delay(60000);
+      await delay(20000);
 
       allPostsCounterFetch = await zkApp.allPostsCounter.fetch();
       console.log('allPostsCounterFetch: ' + allPostsCounterFetch?.toString());
@@ -196,7 +196,7 @@ while (true) {
     }
   } else {
     console.log('Pause to wait for new posts before running loop again...');
-    await delay(60000);
+    await delay(20000);
   }
 }
 
