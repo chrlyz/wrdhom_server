@@ -190,7 +190,7 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
 
 server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
   try {
-    const { howMany } = request.query;
+    const { howMany, fromBlock, toBlock } = request.query;
     const posts = await prisma.posts.findMany({
       take: Number(howMany),
       orderBy: {
@@ -198,7 +198,9 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       },
       where: {
         postBlockHeight: {
-          not: 0
+          not: 0,
+          gte: fromBlock,
+          lte: toBlock
         }
       }
     });
@@ -259,6 +261,8 @@ interface SignedPost {
 
 interface PostsQuery {
   howMany: number,
+  fromBlock: number,
+  toBlock: number
 }
 
 // ============================================================================
