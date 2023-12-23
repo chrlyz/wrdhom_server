@@ -48,6 +48,18 @@ const posts = await regenerateZkAppState(context);
 
 // Get posts content and keep it locally for faster reponses
 
+try {
+  await fs.access('./posts/');
+  console.log('./posts/ directory exists');
+} catch (e: any) {
+  if (e.code === 'ENOENT') {
+    await fs.mkdir('./posts/');
+    console.log('./posts/ directory created');
+  } else {
+    console.error(e);
+  }
+}
+
 for (const post of posts) {
   try {
     await fs.readFile('./posts/' + post.postContentID, 'utf8');
