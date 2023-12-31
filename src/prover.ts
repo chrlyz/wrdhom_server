@@ -94,7 +94,7 @@ while (true) {
 
   for (const pPost of pendingPosts) {
     const result = await provePost(
-      pPost.minaSignature,
+      pPost.postSignature,
       pPost.posterAddress,
       pPost.postContentID,
       pPost.allPostsCounter,

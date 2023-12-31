@@ -147,7 +147,7 @@ server.listen({ port: 3001 }, (err, address) => {
 
 // ============================================================================
 
-server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
+server.post<{Body: SignedPost}>('/posts', async (request) => {
 
   console.log(request.body.signedData);
 
@@ -189,12 +189,68 @@ server.post<{Body: SignedPost}>('/posts*', async (request, reply) => {
 
       await web3storage.uploadFile(file);
       await createSQLPost(signature, posterAddress, allPostsCounter, userPostsCounter, postCID);
-      return request.body;
+      return 'Valid Post!';
     } else {
         return `Post isn't signed`;
     }
   } else {
       return `Derived post CID, doesn't match signed post CID`;
+  }
+});
+
+// ============================================================================
+
+server.post<{Body: SignedPostDeletion}>('/posts/delete', async (request) => {
+
+  const signature = Signature.fromBase58(request.body.signedData.signature);
+  const posterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
+
+  const post = await prisma.posts.findUnique({
+    where: {
+      posterAddress_postContentID: {
+        posterAddress: request.body.signedData.publicKey,
+        postContentID: request.body.postContentID
+      }
+    }
+  });
+
+  if (post?.deletionBlockHeight !== 0n || post.toBeDeletedBlockHeight !== 0n) {
+    return 'Post is already deleted or pending to be deleted';
+  }
+
+  const postContentID = CircuitString.fromString(post?.postContentID);
+
+  const postState = new PostState({
+    posterAddress: posterAddress,
+    postContentID: postContentID,
+    allPostsCounter: Field(post?.allPostsCounter),
+    userPostsCounter: Field(post?.userPostsCounter),
+    postBlockHeight: Field(post?.postBlockHeight),
+    deletionBlockHeight: Field(post?.deletionBlockHeight),
+    restorationBlockHeight: Field(post?.restorationBlockHeight)
+  });
+
+  const postStateHash = postState.hash();
+  const flagPostsAsDeleted = '93137';
+
+  // Check that message to delete post is valid
+  if (request.body.signedData.data[0] === postStateHash.toString()
+    && request.body.signedData.data[1] === flagPostsAsDeleted) {
+      
+      const isSigned = signature.verify(posterAddress, [
+        postState.hash(),
+        Field('93137')
+      ]);
+
+      // Check that message to delete post is signed
+      if (isSigned) {
+        console.log('Valid Deletion!');
+        return 'Valid Deletion!';
+      } else {
+        return 'Post deletion message is not signed';
+      }
+  } else {
+    return 'Post deletion message is not valid';
   }
 });
 
@@ -321,13 +377,17 @@ server.get<{Querystring: ProfileQuery}>('/profile', async (request) => {
 
 // ============================================================================
 
+interface SignedData {
+  signature: string,
+  publicKey: string,
+  data: string[]
+}
+
+// ============================================================================
+
 interface SignedPost {
   post: string,
-  signedData: {
-    signature: string,
-    publicKey: string,
-    data: string[]
-  }
+  signedData: SignedData
 }
 
 // ============================================================================
@@ -345,6 +405,13 @@ interface ProfileQuery {
   howMany: number,
   fromBlock: number,
   toBlock: number
+}
+
+// ============================================================================
+
+interface SignedPostDeletion {
+  postContentID: string,
+  signedData: SignedData
 }
 
 // ============================================================================
@@ -380,7 +447,7 @@ const createSQLPost = async (signature: Signature, posterAddress: PublicKey,
       postBlockHeight: 0,
       deletionBlockHeight: 0,
       restorationBlockHeight: 0,
-      minaSignature: signature.toBase58()
+      postSignature: signature.toBase58()
     }
   });
 }

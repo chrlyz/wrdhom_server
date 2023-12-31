@@ -8,14 +8,18 @@ datasource db {
 }
 
 model posts {
-  posterAddress          String
-  postContentID          String
-  allPostsCounter        BigInt
-  userPostsCounter       BigInt
-  postBlockHeight        BigInt
-  deletionBlockHeight    BigInt
-  restorationBlockHeight BigInt
-  minaSignature          String
+  posterAddress           String
+  postContentID           String
+  allPostsCounter         BigInt
+  userPostsCounter        BigInt
+  postBlockHeight         BigInt
+  deletionBlockHeight     BigInt
+  restorationBlockHeight  BigInt
+  postSignature           String
+  toBeDeletedBlockHeight  BigInt?
+  toBeDeletedSignature    String?
+  toBeRestoredBlockHeight BigInt?
+  toBeRestoredSignature   String?
 
   @@id([posterAddress, postContentID])
 }
