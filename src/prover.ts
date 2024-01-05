@@ -68,7 +68,7 @@ while (true) {
   // Process pending posts to update on-chain state
 
   const pendingPosts = await prisma.posts.findMany({
-  take: 2,
+  take: 1,
   orderBy: {
       allPostsCounter: 'asc'
   },
@@ -94,7 +94,7 @@ while (true) {
 
   for (const pPost of pendingPosts) {
     const result = await provePost(
-      pPost.minaSignature,
+      pPost.postSignature,
       pPost.posterAddress,
       pPost.postContentID,
       pPost.allPostsCounter,

@@ -15,7 +15,23 @@ model posts {
   postBlockHeight        BigInt
   deletionBlockHeight    BigInt
   restorationBlockHeight BigInt
-  minaSignature          String
+  postSignature          String
 
   @@id([posterAddress, postContentID])
+}
+
+model reactions {
+  isTargetPost           Boolean
+  targetKey              String
+  reactorAddress         String
+  reactionCodePoint      BigInt
+  allReactionsCounter    BigInt
+  userReactionsCounter   BigInt
+  targetReactionsCounter BigInt
+  reactionBlockHeight    BigInt
+  deletionBlockHeight    BigInt
+  restorationBlockHeight BigInt
+  reactionSignature      String
+
+  @@id([targetKey, reactorAddress, reactionCodePoint])
 }
