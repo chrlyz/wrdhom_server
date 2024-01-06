@@ -8,6 +8,7 @@ datasource db {
 }
 
 model posts {
+  postKey                String @id
   posterAddress          String
   postContentID          String
   allPostsCounter        BigInt
@@ -16,11 +17,10 @@ model posts {
   deletionBlockHeight    BigInt
   restorationBlockHeight BigInt
   postSignature          String
-
-  @@id([posterAddress, postContentID])
 }
 
 model reactions {
+  reactionKey            String  @id
   isTargetPost           Boolean
   targetKey              String
   reactorAddress         String
@@ -32,6 +32,4 @@ model reactions {
   deletionBlockHeight    BigInt
   restorationBlockHeight BigInt
   reactionSignature      String
-
-  @@id([targetKey, reactorAddress, reactionCodePoint])
 }

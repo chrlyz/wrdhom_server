@@ -1,13 +1,13 @@
 import fastify from 'fastify';
-import { CircuitString, PublicKey, Signature, Field, MerkleMap, Poseidon } from 'o1js';
+import { CircuitString, PublicKey, Signature, Field, MerkleMap, Poseidon, Bool } from 'o1js';
 import cors from '@fastify/cors';
 import { PrismaClient } from '@prisma/client';
 import { createFileEncoderStream, CAREncoderStream } from 'ipfs-car';
 import { Blob } from '@web-std/file';
 import { create } from '@web3-storage/w3up-client';
 import * as dotenv from 'dotenv';
-import { regenerateZkAppState } from './utils/state.js';
-import { PostState } from 'wrdhom';
+import { regeneratePostsZkAppState } from './utils/state.js';
+import { PostState, ReactionState } from 'wrdhom';
 import fs from 'fs/promises';
 import { fastifySchedule } from '@fastify/schedule';
 import { SimpleIntervalJob, AsyncTask } from 'toad-scheduler';
@@ -44,7 +44,7 @@ const context = {
   numberOfPosts: numberOfPosts
 }
 
-const posts = await regenerateZkAppState(context);
+const posts = await regeneratePostsZkAppState(context);
 
 // Get posts content and keep it locally for faster reponses
 
@@ -147,14 +147,17 @@ server.listen({ port: 3001 }, (err, address) => {
 
 // ============================================================================
 
-server.post<{Body: SignedPost}>('/posts', async (request, reply) => {
+server.post<{Body: SignedPost}>('/posts', async (request) => {
 
   console.log(request.body.signedData);
 
   // Check that content and signed CID match
   const signature = Signature.fromBase58(request.body.signedData.signature);
   const posterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
-  const postContentIDAsBigInt = Field(request.body.signedData.data[0]).toBigInt();
+  const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
+  const postContentIDAsField = Field(request.body.signedData.data[0]);
+  const postKey = Poseidon.hash([posterAddressAsField, postContentIDAsField]);
+  const postContentIDAsBigInt = postContentIDAsField.toBigInt();
   const file = new Blob([request.body.post]);
   console.log(request.body.post);
   const postCID = await getCID(file);
@@ -185,7 +188,7 @@ server.post<{Body: SignedPost}>('/posts', async (request, reply) => {
       console.log('userPostsCounter: ' + userPostsCounter);
 
       await web3storage.uploadFile(file);
-      await createSQLPost(signature, posterAddress, allPostsCounter, userPostsCounter, postCID);
+      await createSQLPost(postKey, signature, posterAddress, allPostsCounter, userPostsCounter, postCID);
       return request.body;
     } else {
         return `Post isn't signed`;
@@ -197,16 +200,17 @@ server.post<{Body: SignedPost}>('/posts', async (request, reply) => {
 
 // ============================================================================
 
-server.post<{Body: SignedReaction}>('/reactions', async (request) => {
+server.post<{Body: SignedReaction}>('/reactions*', async (request) => {
+  console.log('reactions');
 
   const signature = Signature.fromBase58(request.body.signedData.signature);
   const reactorAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
 
   const post = await prisma.posts.findUnique({
     where: {
-      posterAddress_postContentID: {
-        posterAddress: request.body.posterAddress,
-        postContentID: request.body.postContentID
+      postKey: request.body.signedData.data[0],
+      postBlockHeight: {
+        not: 0
       }
     }
   });
@@ -215,16 +219,14 @@ server.post<{Body: SignedReaction}>('/reactions', async (request) => {
     return `The target you are trying to react to doesn't exist`;
   }
 
-  // Check that reaction is valid
   const reactionEmojiCodePoint = Number(request.body.signedData.data[1]);
-  const emojisCodePoints = ['❤️', '💔', '😂', '🤔', '😢', '😠', '😎',
+  const emojisCodePoints = ['❤️', '💔', '😂', '🤔', '😮', '😢', '😠', '😎',
     '🔥', '👀', '👍', '👎', '🙏', '🤝', '🤌', '🙌', '🤭',
     '😳', '😭', '🤯', '😡', '👽', '😈', '💀', '💯'
   ].map(emoji => emoji.codePointAt(0));
   const emojisSetCodePoints = new Set(emojisCodePoints);
   if (emojisSetCodePoints.has(reactionEmojiCodePoint)) {
 
-    // Check that the reaction is signed
     const posterAddressAsField = Poseidon.hash(PublicKey.fromBase58(post.posterAddress).toFields());
     const postContentIDAsField = CircuitString.fromString(post.postContentID).hash();
     const targetKey = Poseidon.hash([posterAddressAsField, postContentIDAsField]);
@@ -232,6 +234,9 @@ server.post<{Body: SignedReaction}>('/reactions', async (request) => {
       targetKey,
       Field(request.body.signedData.data[1])
     ]).toBoolean();
+    const reactorAddressAsField = Poseidon.hash(reactorAddress.toFields());
+    const reactionCodePointAsField = Field(reactionEmojiCodePoint);
+    const reactionKey = Poseidon.hash([targetKey, reactorAddressAsField, reactionCodePointAsField]);
 
     if (isSigned) {
       const allReactionsCounter = (await prisma.reactions.count()) + 1;
@@ -253,7 +258,7 @@ server.post<{Body: SignedReaction}>('/reactions', async (request) => {
       const targetReactionsCounter = reactionsForTarget.length + 1;
       console.log('targetReactionsCounter: ' + targetReactionsCounter);
 
-      await createSQLReaction(targetKey, request.body.signedData.publicKey, reactionEmojiCodePoint,
+      await createSQLReaction(reactionKey, targetKey, request.body.signedData.publicKey, reactionEmojiCodePoint,
         allReactionsCounter, userReactionsCounter, targetReactionsCounter, request.body.signedData.signature)
       return 'Valid Reaction!';
     } else {
@@ -307,6 +312,39 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         deletionBlockHeight: Field(post.deletionBlockHeight),
         restorationBlockHeight: Field(post.restorationBlockHeight)
       });
+
+      const postReactions = await prisma.reactions.findMany({
+        where: {
+          targetKey: postKey.toString(),
+          reactionBlockHeight: {
+            not: 0
+          }
+        }
+      });
+
+      const reactions: {
+        reactionState: string
+      }[] = [];
+
+      for (const reaction of postReactions) {
+        const reactorAddress = PublicKey.fromBase58(reaction.reactorAddress);
+        const reactorAddressAsField = Poseidon.hash(reactorAddress.toFields());
+        const reactionCodePointAsField = Field(reaction.reactionCodePoint);
+        const reactionKey = Poseidon.hash([postKey, reactorAddressAsField, reactionCodePointAsField]);
+
+        const reactionState = new ReactionState({
+          isTargetPost: Bool(reaction.isTargetPost),
+          targetKey: postKey,
+          reactorAddress: reactorAddress,
+          reactionCodePoint: reactionCodePointAsField,
+          allReactionsCounter: Field(reaction.allReactionsCounter),
+          userReactionsCounter: Field(reaction.userReactionsCounter),
+          targetReactionsCounter: Field(reaction.targetReactionsCounter),
+          reactionBlockHeight: Field(reaction.reactionBlockHeight),
+          deletionBlockHeight: Field(reaction.deletionBlockHeight),
+          restorationBlockHeight: Field(reaction.restorationBlockHeight)
+        });
+      }
 
       postsResponse.push({
         postState: JSON.stringify(postState),
@@ -446,11 +484,12 @@ const getCID = async (file: Blob) => {
 
 // ============================================================================
 
-const createSQLPost = async (signature: Signature, posterAddress: PublicKey,
+const createSQLPost = async (postKey: Field, signature: Signature, posterAddress: PublicKey,
   allPostsCounter: number, userPostsCounter: number, postCID: any) => {
 
   await prisma.posts.create({
     data: {
+      postKey: postKey.toString(),
       posterAddress: posterAddress.toBase58(),
       postContentID: postCID.toString(),
       allPostsCounter: allPostsCounter,
@@ -465,13 +504,14 @@ const createSQLPost = async (signature: Signature, posterAddress: PublicKey,
 
 // ============================================================================
 
-const createSQLReaction = async (targetKey: Field, reactorAddress: string,
+const createSQLReaction = async (reactionKey: Field, targetKey: Field, reactorAddress: string,
   reactionCodePoint: number, allReactionsCounter: number,
   userReactionsCounter: number, targetReactionsCounter:number,
   signature: string) => {
 
   await prisma.reactions.create({
     data: {
+      reactionKey: reactionKey.toString(),
       isTargetPost: true,
       targetKey: targetKey.toString(),
       reactorAddress: reactorAddress,
