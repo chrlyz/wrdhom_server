@@ -248,7 +248,7 @@ server.post<{Body: SignedPost}>('/posts', async (request) => {
 
 // ============================================================================
 
-server.post<{Body: SignedReaction}>('/reactions*', async (request) => {
+server.post<{Body: SignedReaction}>('/reactions', async (request) => {
   console.log('reactions');
 
   const signature = Signature.fromBase58(request.body.signedData.signature);
@@ -321,20 +321,50 @@ server.post<{Body: SignedReaction}>('/reactions*', async (request) => {
 
 server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
   try {
-    const { howMany, fromBlock, toBlock } = request.query;
-    const posts = await prisma.posts.findMany({
-      take: Number(howMany),
-      orderBy: {
-        allPostsCounter: 'desc'
-      },
-      where: {
-        postBlockHeight: {
-          not: 0,
-          gte: fromBlock,
-          lte: toBlock
+    const { howMany, fromBlock, toBlock, posterAddress } = request.query;
+    let posts: {
+      postKey: string;
+      posterAddress: string;
+      postContentID: string;
+      allPostsCounter: bigint;
+      userPostsCounter: bigint;
+      postBlockHeight: bigint;
+      deletionBlockHeight: bigint;
+      restorationBlockHeight: bigint;
+      postSignature: string;
+    }[];
+    console.log(posterAddress)
+
+    if (posterAddress === undefined) {
+      posts = await prisma.posts.findMany({
+        take: Number(howMany),
+        orderBy: {
+          allPostsCounter: 'desc'
+        },
+        where: {
+          postBlockHeight: {
+            not: 0,
+            gte: fromBlock,
+            lte: toBlock
+          }
         }
-      }
-    });
+      });
+    } else {
+      posts = await prisma.posts.findMany({
+        take: Number(howMany),
+        orderBy: {
+          allPostsCounter: 'desc'
+        },
+        where: {
+          posterAddress: posterAddress,
+          postBlockHeight: {
+            not: 0,
+            gte: fromBlock,
+            lte: toBlock
+          }
+        }
+      });
+    }
 
     const postsResponse: {
       postState: string,
@@ -427,67 +457,6 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
 
 // ============================================================================
 
-server.get<{Querystring: ProfileQuery}>('/profile', async (request) => {
-  try {
-    const { posterAddress, howMany, fromBlock, toBlock } = request.query;
-    const posts = await prisma.posts.findMany({
-      take: Number(howMany),
-      orderBy: {
-        allPostsCounter: 'desc'
-      },
-      where: {
-        posterAddress: posterAddress,
-        postBlockHeight: {
-          not: 0,
-          gte: fromBlock,
-          lte: toBlock
-        }
-      }
-    });
-
-    const postsResponse: {
-      postState: string,
-      postContentID: string,
-      content: string,
-      postWitness: JSON
-    }[] = [];
-
-    for (const post of posts) {
-      const posterAddress = PublicKey.fromBase58(post.posterAddress);
-      const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
-      const postContentID = CircuitString.fromString(post.postContentID);
-      const postKey = Poseidon.hash([posterAddressAsField, postContentID.hash()]);
-      const postWitness = postsMap.getWitness(postKey).toJSON();
-      const content = await fs.readFile('./posts/' + post.postContentID, 'utf8');
-
-      const postState = new PostState({
-        posterAddress: posterAddress,
-        postContentID: postContentID,
-        allPostsCounter: Field(post.allPostsCounter),
-        userPostsCounter: Field(post.userPostsCounter),
-        postBlockHeight: Field(post.postBlockHeight),
-        deletionBlockHeight: Field(post.deletionBlockHeight),
-        restorationBlockHeight: Field(post.restorationBlockHeight)
-      });
-
-      postsResponse.push({
-        postState: JSON.stringify(postState),
-        postContentID: post.postContentID,
-        content: content,
-        postWitness: postWitness
-      })
-    };
-
-    console.log(postsResponse);
-
-    return postsResponse;
-  } catch(e) {
-      console.error(e);
-  }
-});
-
-// ============================================================================
-
 interface SignedData {
   signature: string,
   publicKey: string,
@@ -506,16 +475,8 @@ interface SignedPost {
 interface PostsQuery {
   howMany: number,
   fromBlock: number,
-  toBlock: number
-}
-
-// ============================================================================
-
-interface ProfileQuery {
-  posterAddress: string,
-  howMany: number,
-  fromBlock: number,
-  toBlock: number
+  toBlock: number,
+  posterAddress: string
 }
 
 // ============================================================================
