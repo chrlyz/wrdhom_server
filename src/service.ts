@@ -132,18 +132,51 @@ const syncStateTask = new AsyncTask(
         restorationBlockHeight: Field(pPost.restorationBlockHeight)
       });
 
-      const postKey = Poseidon.hash([
-        Poseidon.hash(postState.posterAddress.toFields()),
-        postState.postContentID.hash()
-      ]);
-
+      const postKey = Field(pPost.postKey);
       postsMap.set(postKey, postState.hash());
       postsContext.numberOfPosts += 1;
+    }
+
+    const pendingReactions = await prisma.reactions.findMany({
+      orderBy: {
+        allReactionsCounter: 'asc'
+      },
+      where: {
+        allReactionsCounter: {
+          gt: reactionsContext.numberOfRections
+        },
+        reactionBlockHeight: {
+          not: 0
+        }
+      }
+    });
+    for (const pReaction of pendingReactions) {
+      const reactorAddress = PublicKey.fromBase58(pReaction.reactorAddress);
+      const reactorAddressAsField = Poseidon.hash(reactorAddress.toFields());
+      const reactionCodePointAsField = Field(pReaction.reactionCodePoint);
+      
+      console.log(pReaction);
+      const reactionState = new ReactionState({
+        isTargetPost: Bool(pReaction.isTargetPost),
+        targetKey: Field(pReaction.targetKey),
+        reactorAddress: reactorAddress,
+        reactionCodePoint: reactionCodePointAsField,
+        allReactionsCounter: Field(pReaction.allReactionsCounter),
+        userReactionsCounter: Field(pReaction.userReactionsCounter),
+        targetReactionsCounter: Field(pReaction.targetReactionsCounter),
+        reactionBlockHeight: Field(pReaction.reactionBlockHeight),
+        deletionBlockHeight: Field(pReaction.deletionBlockHeight),
+        restorationBlockHeight: Field(pReaction.restorationBlockHeight)
+      });
+
+      const reactionKey = Field(pReaction.reactionKey);
+      reactionsMap.set(reactionKey, reactionState.hash());
+      reactionsContext.numberOfRections += 1;
     }
   },
   (e) => {console.error(e)}
 )
-const syncStateJob = new SimpleIntervalJob({ seconds: 20, }, syncStateTask)
+const syncStateJob = new SimpleIntervalJob({ seconds: 10, }, syncStateTask)
 
 server.register(fastifySchedule);
 server.ready().then(() => {
@@ -318,7 +351,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       const posterAddress = PublicKey.fromBase58(post.posterAddress);
       const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
       const postContentID = CircuitString.fromString(post.postContentID);
-      const postKey = Poseidon.hash([posterAddressAsField, postContentID.hash()]);
+      const postKey = Field(post.postKey);
       const postWitness = postsMap.getWitness(postKey).toJSON();
       const content = await fs.readFile('./posts/' + post.postContentID, 'utf8');
 
