@@ -6,7 +6,7 @@ import { createFileEncoderStream, CAREncoderStream } from 'ipfs-car';
 import { Blob } from '@web-std/file';
 import { create } from '@web3-storage/w3up-client';
 import * as dotenv from 'dotenv';
-import { regeneratePostsZkAppState } from './utils/state.js';
+import { regeneratePostsZkAppState, regenerateReactionsZkAppState } from './utils/state.js';
 import { PostState, ReactionState } from 'wrdhom';
 import fs from 'fs/promises';
 import { fastifySchedule } from '@fastify/schedule';
@@ -37,14 +37,29 @@ const usersPostsCountersMap = new MerkleMap();
 const postsMap = new MerkleMap();
 let numberOfPosts = 0;
 
-const context = {
+const postsContext = {
   prisma: prisma,
   usersPostsCountersMap: usersPostsCountersMap,
   postsMap: postsMap,
   numberOfPosts: numberOfPosts
 }
 
-const posts = await regeneratePostsZkAppState(context);
+const posts = await regeneratePostsZkAppState(postsContext);
+
+const usersReactionsCountersMap = new MerkleMap();
+const targetsReactionsCountersMap =  new MerkleMap();
+const reactionsMap = new MerkleMap();
+let numberOfRections = 0;
+
+const reactionsContext = {
+  prisma: prisma,
+  usersReactionsCountersMap: usersReactionsCountersMap,
+  targetsReactionsCountersMap: targetsReactionsCountersMap,
+  reactionsMap: reactionsMap,
+  numberOfRections: numberOfRections
+}
+
+await regenerateReactionsZkAppState(reactionsContext);
 
 // Get posts content and keep it locally for faster reponses
 
@@ -94,7 +109,7 @@ const syncStateTask = new AsyncTask(
       },
       where: {
         allPostsCounter: {
-          gt: context.numberOfPosts
+          gt: postsContext.numberOfPosts
         },
         postBlockHeight: {
           not: 0
@@ -123,7 +138,7 @@ const syncStateTask = new AsyncTask(
       ]);
 
       postsMap.set(postKey, postState.hash());
-      context.numberOfPosts += 1;
+      postsContext.numberOfPosts += 1;
     }
   },
   (e) => {console.error(e)}
@@ -292,7 +307,11 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       postState: string,
       postContentID: string,
       content: string,
-      postWitness: JSON
+      postWitness: JSON,
+      reactionsResponse: {
+        reactionState: string,
+        reactionWitness: JSON
+      }[]
     }[] = [];
 
     for (const post of posts) {
@@ -314,6 +333,9 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       });
 
       const postReactions = await prisma.reactions.findMany({
+        orderBy: {
+          allReactionsCounter: 'desc'
+        },
         where: {
           targetKey: postKey.toString(),
           reactionBlockHeight: {
@@ -322,8 +344,9 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         }
       });
 
-      const reactions: {
-        reactionState: string
+      const reactionsResponse: {
+        reactionState: string,
+        reactionWitness: JSON
       }[] = [];
 
       for (const reaction of postReactions) {
@@ -331,6 +354,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         const reactorAddressAsField = Poseidon.hash(reactorAddress.toFields());
         const reactionCodePointAsField = Field(reaction.reactionCodePoint);
         const reactionKey = Poseidon.hash([postKey, reactorAddressAsField, reactionCodePointAsField]);
+        const reactionWitness = reactionsMap.getWitness(reactionKey).toJSON();
 
         const reactionState = new ReactionState({
           isTargetPost: Bool(reaction.isTargetPost),
@@ -344,13 +368,19 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
           deletionBlockHeight: Field(reaction.deletionBlockHeight),
           restorationBlockHeight: Field(reaction.restorationBlockHeight)
         });
+
+        reactionsResponse.push({
+          reactionState: JSON.stringify(reactionState),
+          reactionWitness: reactionWitness
+        })
       }
 
       postsResponse.push({
         postState: JSON.stringify(postState),
         postContentID: post.postContentID,
         content: content,
-        postWitness: postWitness
+        postWitness: postWitness,
+        reactionsResponse: reactionsResponse
       })
     };
 
