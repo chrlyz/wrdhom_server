@@ -383,7 +383,7 @@ server.post<{Body: SignedComment}>('/comments', async (request) => {
 
       await web3storage.uploadFile(file);
       await createSQLComment(commentKey, targetKey, request.body.signedData.publicKey,
-        request.body.signedData.data[1], allCommentsCounter, userCommentsCounter, targetCommentsCounter,
+        commentCID, allCommentsCounter, userCommentsCounter, targetCommentsCounter,
         request.body.signedData.signature);
       return 'Valid Comment!';
     } else {
@@ -640,7 +640,7 @@ const createSQLReaction = async (reactionKey: Field, targetKey: Field, reactorAd
 // ============================================================================
 
 const createSQLComment = async (commentKey: Field, targetKey: Field, commenterAddress: string,
-  commentContentID: string, allCommentsCounter: number,
+  commentCID: any, allCommentsCounter: number,
   userCommentsCounter: number, targetCommentsCounter:number,
   signature: string) => {
 
@@ -650,7 +650,7 @@ const createSQLComment = async (commentKey: Field, targetKey: Field, commenterAd
       isTargetPost: true,
       targetKey: targetKey.toString(),
       commenterAddress: commenterAddress,
-      commentContentID: commentContentID,
+      commentContentID: commentCID.toString(),
       allCommentsCounter: allCommentsCounter,
       userCommentsCounter: userCommentsCounter,
       targetCommentsCounter: targetCommentsCounter,

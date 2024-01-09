@@ -1,6 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { MerkleMap, Poseidon, PublicKey, CircuitString, Field, Bool } from 'o1js';
-import { PostState, ReactionState } from 'wrdhom';
+import { PostState, ReactionState, CommentState } from 'wrdhom';
 
 // ============================================================================
 
@@ -96,7 +96,7 @@ export async function regenerateReactionsZkAppState(context: {
   console.log(reactions)
   
   const reactors = new Set(reactions.map( reaction => reaction.reactorAddress));
-  console.log('posters:');
+  console.log('reactors:');
   console.log(reactors);
   
   for (const reactor of reactors) {
@@ -169,6 +169,105 @@ export async function regenerateReactionsZkAppState(context: {
   console.log('Original number of reactions: ' + context.numberOfRections);
 
   return reactions;
+}
+
+// ============================================================================
+
+export async function regenerateCommentsZkAppState(context: {
+  prisma: PrismaClient,
+  usersCommentsCountersMap: MerkleMap,
+  targetsCommentsCountersMap: MerkleMap,
+  commentsMap: MerkleMap,
+  numberOfComments: number
+}
+) {
+  const comments = await context.prisma.comments.findMany({
+    orderBy: {
+      allCommentsCounter: 'asc'
+    },
+    where: {
+      commentBlockHeight: {
+        not: 0
+      }
+    }
+  });
+  console.log('comments:');
+  console.log(comments)
+  
+  const commenters = new Set(comments.map( comment => comment.commenterAddress));
+  console.log('commenters:');
+  console.log(commenters);
+  
+  for (const commenter of commenters) {
+    const userComments = await context.prisma.comments.findMany({
+      where: {
+        commenterAddress: commenter,
+        commentBlockHeight: {
+        not: 0
+        }
+      }
+    });
+    console.log('Initial usersCommentsCountersMap root: ' + context.usersCommentsCountersMap.getRoot().toString());
+    context.usersCommentsCountersMap.set(
+      Poseidon.hash(PublicKey.fromBase58(commenter).toFields()),
+      Field(userComments.length)
+    );
+    console.log(userComments.length);
+    console.log('Latest usersCommentsCountersMap root: ' + context.usersCommentsCountersMap.getRoot().toString());
+  };
+
+  const targets = new Set(comments.map( comment => comment.targetKey));
+  console.log('targets');
+  console.log(targets);
+
+  for (const target of targets) {
+    const targetComments = await context.prisma.comments.findMany({
+      where: {
+        targetKey: target,
+        commentBlockHeight: {
+          not: 0
+        }
+      }
+    })
+    console.log('Initial targetsCommentsCountersMap root: ' + context.targetsCommentsCountersMap.getRoot().toString());
+    context.targetsCommentsCountersMap.set(
+      Field(target),
+      Field(targetComments.length)
+    );
+    console.log(targetComments.length);
+    console.log('Latest targetsCommentsCountersMap root: ' + context.targetsCommentsCountersMap.getRoot().toString());
+  }
+  
+  comments.forEach( comment => {
+    const commenterAddress = PublicKey.fromBase58(comment.commenterAddress);
+    const commenterAddressAsField = Poseidon.hash(commenterAddress.toFields());
+    const commentContentIDAsField = Field(comment.commentContentID);
+    const targetKey = Field(comment.targetKey);
+
+    const commentState = new CommentState({
+      isTargetPost: Bool(comment.isTargetPost),
+      targetKey: targetKey,
+      commenterAddress: commenterAddress,
+      commentContentID: commentContentIDAsField,
+      allCommentsCounter: Field(comment.allCommentsCounter),
+      userCommentsCounter: Field(comment.userCommentsCounter),
+      targetCommentsCounter: Field(comment.targetCommentsCounter),
+      commentBlockHeight: Field(comment.commentBlockHeight),
+      deletionBlockHeight: Field(comment.deletionBlockHeight),
+      restorationBlockHeight: Field(comment.restorationBlockHeight)
+    });
+    console.log('Initial commentsMap root: ' + context.commentsMap.getRoot().toString());
+    context.commentsMap.set(
+      Poseidon.hash([targetKey, commenterAddressAsField, commentContentIDAsField]),
+      commentState.hash()
+    );
+    console.log('Latest commentsMap root: ' + context.commentsMap.getRoot().toString());
+  });
+  
+  context.numberOfComments = comments.length;
+  console.log('Original number of comments: ' + context.numberOfComments);
+
+  return comments;
 }
 
 // ============================================================================

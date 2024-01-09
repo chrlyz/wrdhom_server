@@ -24,7 +24,7 @@
     "ipfs-car": "^1.0.0",
     "mina-signer": "^2.1.1",
     "toad-scheduler": "^3.0.0",
-    "wrdhom": "^0.2.2"
+    "wrdhom": "^0.3.0"
   },
   "devDependencies": {
     "@types/node": "^20.9.0",
