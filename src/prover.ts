@@ -4,13 +4,15 @@ import { CircuitString, PublicKey, Signature, fetchLastBlock,
 import { Config, PostState, PostsTransition, Posts,
   PostsContract, PostsProof, ReactionState,
   ReactionsTransition, Reactions, ReactionsContract,
-  ReactionsProof } from 'wrdhom';
+  ReactionsProof, CommentState, CommentsTransition, Comments,
+  CommentsContract, CommentsProof
+} from 'wrdhom';
 import fs from 'fs/promises';
 import { performance } from 'perf_hooks';
 import { PrismaClient } from '@prisma/client';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { regeneratePostsZkAppState, regenerateReactionsZkAppState } from './utils/state.js';
+import { regenerateCommentsZkAppState, regeneratePostsZkAppState, regenerateReactionsZkAppState } from './utils/state.js';
 
 // ============================================================================
 
@@ -23,6 +25,7 @@ const prisma = new PrismaClient();
 const configJson: Config = JSON.parse(await fs.readFile('config.json', 'utf8'));
 const configPosts = configJson.deployAliases['posts'];
 const configReactions = configJson.deployAliases['reactions'];
+const configComments = configJson.deployAliases['comments'];
 const Network = Mina.Network(configPosts.url);
 Mina.setActiveInstance(Network);
 const fee = Number(configPosts.fee) * 1e9; // in nanomina (1 billion = 1.0 mina)
@@ -32,16 +35,21 @@ const postsContractKeysBase58: { publicKey: string } =
   JSON.parse(await fs.readFile(configPosts.keyPath, 'utf8'));
 const reactionsContractKeysBase58: { publicKey: string } =
   JSON.parse(await fs.readFile(configReactions.keyPath, 'utf8'));
+const commentsContractKeysBase58: { publicKey: string } =
+  JSON.parse(await fs.readFile(configComments.keyPath, 'utf8'));
 const feepayerKey = PrivateKey.fromBase58(feepayerKeysBase58.privateKey);
 const feepayerAddress =   PublicKey.fromBase58(feepayerKeysBase58.publicKey);
 const postsContractAddress = PublicKey.fromBase58(postsContractKeysBase58.publicKey);
 const reactionsContractAddress = PublicKey.fromBase58(reactionsContractKeysBase58.publicKey);
+const commentsContractAddress = PublicKey.fromBase58(commentsContractKeysBase58.publicKey);
 // Fetch accounts to make sure they are available on cache during the execution of the program
 await fetchAccount({ publicKey: feepayerKeysBase58.publicKey });
 await fetchAccount({ publicKey: postsContractKeysBase58.publicKey });
 await fetchAccount({ publicKey: reactionsContractKeysBase58.publicKey });
+await fetchAccount({publicKey: commentsContractKeysBase58.publicKey});
 const postsContract = new PostsContract(postsContractAddress);
 const reactionsContract = new ReactionsContract(reactionsContractAddress);
+const commentsContract = new CommentsContract(commentsContractAddress);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -56,6 +64,10 @@ console.log('Compiling Reactions ZkProgram...');
 await Reactions.compile({cache: Cache.FileSystem(cachePath)});
 console.log('Compiling ReactionsContract...');
 await ReactionsContract.compile({cache: Cache.FileSystem(cachePath)});
+console.log('Compiling Comments ZkProgram...');
+await Comments.compile({cache: Cache.FileSystem(cachePath)});
+console.log('Compiling CommentsContract...');
+await CommentsContract.compile({cache: Cache.FileSystem(cachePath)});
 console.log('Compiled');
 let endTime = performance.now();
 console.log(`${(endTime - startTime)/1000/60} minutes`);
@@ -90,8 +102,24 @@ const reactionsContext = {
 
 await regenerateReactionsZkAppState(reactionsContext);
 
+const usersCommentsCountersMap = new MerkleMap();
+const targetsCommentsCountersMap =  new MerkleMap();
+const commentsMap = new MerkleMap();
+let numberOfComments = 0;
+
+const commentsContext = {
+  prisma: prisma,
+  usersCommentsCountersMap: usersCommentsCountersMap,
+  targetsCommentsCountersMap: targetsCommentsCountersMap,
+  commentsMap: commentsMap,
+  numberOfComments: numberOfComments
+}
+
+await regenerateCommentsZkAppState(commentsContext);
+
 const provingPosts = 0;
 const provingReactions = 1;
+const provingComments = 2;
 let provingTurn = 0;
 
 while (true) {
@@ -247,7 +275,7 @@ while (true) {
     
       startTime = performance.now();
     
-      const lastBlock = await fetchLastBlock(configPosts.url);
+      const lastBlock = await fetchLastBlock(configReactions.url);
       const reactionBlockHeight = lastBlock.blockchainLength.toBigint();
       console.log(reactionBlockHeight);
     
@@ -384,9 +412,165 @@ while (true) {
         console.log('Pause to wait for new actions before running loop again...');
         await delay(10000);
       }
+  } else if      (provingTurn === provingComments) {
+
+    const pendingComments = await prisma.comments.findMany({
+      take: 1,
+      orderBy: {
+          allCommentsCounter: 'asc'
+      },
+      where: {
+          commentBlockHeight: 0
+      }
+      });
+      commentsContext.numberOfComments += pendingComments.length;
+      console.log('Number of comments if update is successful: ' + commentsContext.numberOfComments);
+      console.log('pendingComments:');
+      console.log(pendingComments);
+    
+      startTime = performance.now();
+    
+      const lastBlock = await fetchLastBlock(configComments.url);
+      const commentBlockHeight = lastBlock.blockchainLength.toBigint();
+      console.log(commentBlockHeight);
+    
+      const transitionsAndProofs: {
+        transition: CommentsTransition,
+        proof: CommentsProof
+      }[] = [];
+    
+      for (const pComment of pendingComments) {
+        const result = await proveComment(
+          pComment.isTargetPost,
+          pComment.targetKey,
+          pComment.commenterAddress,
+          pComment.commentContentID,
+          pComment.allCommentsCounter,
+          pComment.userCommentsCounter,
+          pComment.targetCommentsCounter,
+          commentBlockHeight,
+          pComment.deletionBlockHeight,
+          pComment.restorationBlockHeight,
+          pComment.commentSignature
+        );
+    
+        transitionsAndProofs.push(result);
+      }
+    
+      if (transitionsAndProofs.length !== 0) {
+        await updateCommentsOnChainState(transitionsAndProofs);
+    
+        endTime = performance.now();
+        console.log(`${(endTime - startTime)/1000/60} minutes`);
+    
+        let tries = 0;
+        const maxTries = 50;
+        let allCommentsCounterFetch;
+        let userCommentsCounterFetch;
+        let targetCommentsCounterFetch;
+        let commentsFetch;
+        while (tries < maxTries) {
+          console.log('Pause to wait for the transaction to confirm...');
+          await delay(20000);
+    
+          allCommentsCounterFetch = await commentsContract.allCommentsCounter.fetch();
+          console.log('allCommentsCounterFetch: ' + allCommentsCounterFetch?.toString());
+          userCommentsCounterFetch = await commentsContract.usersCommentsCounters.fetch();
+          console.log('userCommentsCounterFetch: ' + userCommentsCounterFetch?.toString());
+          targetCommentsCounterFetch = await commentsContract.targetsCommentsCounters.fetch();
+          console.log('targetCommentsCounterFetch: ' + targetCommentsCounterFetch?.toString());
+          commentsFetch = await commentsContract.comments.fetch();
+          console.log('commentsFetch: ' + commentsFetch?.toString());
+    
+          console.log(Field(commentsContext.numberOfComments).toString());
+          console.log(usersCommentsCountersMap.getRoot().toString());
+          console.log(targetsCommentsCountersMap.getRoot().toString());
+          console.log(commentsMap.getRoot().toString());
+    
+          console.log(allCommentsCounterFetch?.equals(Field(commentsContext.numberOfComments)).toBoolean());
+          console.log(userCommentsCounterFetch?.equals(usersCommentsCountersMap.getRoot()).toBoolean());
+          console.log(targetCommentsCounterFetch?.equals(targetsCommentsCountersMap.getRoot()).toBoolean());
+          console.log(commentsFetch?.equals(commentsMap.getRoot()).toBoolean());
+    
+          if (allCommentsCounterFetch?.equals(Field(commentsContext.numberOfComments)).toBoolean()
+          && userCommentsCounterFetch?.equals(usersCommentsCountersMap.getRoot()).toBoolean()
+          && targetCommentsCounterFetch?.equals(targetsCommentsCountersMap.getRoot()).toBoolean()
+          && commentsFetch?.equals(commentsMap.getRoot()).toBoolean()) {
+            for (const pComment of pendingComments) {
+              await prisma.comments.update({
+                  where: {
+                    commentKey: pComment.commentKey
+                  },
+                  data: {
+                    commentBlockHeight: commentBlockHeight
+                  }
+              });
+            }
+            tries = maxTries;
+          }
+          // Reset initial state if transaction appears to have failed
+          if (tries === maxTries - 1) {
+            commentsContext.numberOfComments -= pendingComments.length;
+            console.log('Original number of comments: ' + postsContext.numberOfPosts);
+    
+            const pendingCommenters = new Set(pendingComments.map( comment => comment.commenterAddress));
+            for (const commenter of pendingCommenters) {
+              const userComments = await prisma.comments.findMany({
+                where: {
+                  commenterAddress: commenter,
+                  commentBlockHeight: {
+                    not: 0
+                  }
+                }
+              });
+              console.log(userComments);
+              console.log('Initial usersCommentsCountersMap root: ' + usersCommentsCountersMap.getRoot().toString());
+              usersCommentsCountersMap.set(
+                Poseidon.hash(PublicKey.fromBase58(commenter).toFields()),
+                Field(userComments.length)
+              );
+              console.log(userComments.length);
+              console.log('Latest usersCommentsCountersMap root: ' + usersCommentsCountersMap.getRoot().toString());
+            };
+
+            const pendingTargets = new Set(pendingComments.map( comment => comment.targetKey));
+            for (const target of pendingTargets) {
+              const targetComments = await prisma.comments.findMany({
+                where: {
+                  targetKey: target,
+                  commentBlockHeight: {
+                    not: 0
+                  }
+                }
+              })
+              console.log('Initial targetsCommentsCountersMap root: ' + targetsCommentsCountersMap.getRoot().toString());
+              targetsCommentsCountersMap.set(
+                Field(target),
+                Field(targetComments.length)
+              );
+              console.log(targetComments.length);
+              console.log('Latest targetsCommentsCountersMap root: ' + targetsCommentsCountersMap.getRoot().toString());
+            }
+
+            pendingComments.forEach( pComment => {
+              console.log('Initial commentsMap root: ' + commentsMap.getRoot().toString());
+              commentsMap.set(
+                  Field(pComment.commentKey),
+                  Field(0)
+              );
+              console.log('Latest commentsMap root: ' + commentsMap.getRoot().toString());
+            });
+          }
+          tries++;
+        }
+      } else {
+        console.log('Pause to wait for new actions before running loop again...');
+        await delay(10000);
+      }
+
   }
   provingTurn++;
-  if (provingTurn > provingReactions) {
+  if (provingTurn > provingComments) {
     provingTurn = 0;
   }
 }
@@ -630,6 +814,137 @@ async function updateReactionsOnChainState(transitionsAndProofs: {
     { sender: feepayerAddress, fee: fee },
     () => {
       reactionsContract.update(transitionsAndProofs[0].proof);
+    }
+  );
+  await txn.prove();
+  sentTxn = await txn.sign([feepayerKey]).send();
+
+  if (sentTxn?.hash() !== undefined) {
+    console.log(`https://minascan.io/berkeley/tx/${sentTxn.hash()}`);
+  }
+
+  return sentTxn;
+}
+
+// ============================================================================
+
+async function proveComment(isTargetPost: boolean, targetKey: string,
+  commenterAddressBase58: string, commentContentID: string,
+  allCommentsCounter: bigint, userCommentsCounter: bigint,
+  targetCommentsCounter: bigint, commentBlockHeight: bigint,
+  deletionBlockHeight: bigint, restorationBlockHeight: bigint,
+  signatureBase58: string) {
+
+  const commenterAddress = PublicKey.fromBase58(commenterAddressBase58);
+  const commenterAddressAsField = Poseidon.hash(commenterAddress.toFields());
+  const commentContentIDAsCS = CircuitString.fromString(commentContentID);
+  const commentContentIDAsField = commentContentIDAsCS.hash();
+  const targetKeyAsField = Field(targetKey);
+  const signature = Signature.fromBase58(signatureBase58);
+
+  const commentState = new CommentState({
+    isTargetPost: Bool(isTargetPost),
+    targetKey: targetKeyAsField,
+    commenterAddress: commenterAddress,
+    commentContentID: commentContentIDAsCS,
+    allCommentsCounter: Field(allCommentsCounter),
+    userCommentsCounter: Field(userCommentsCounter),
+    targetCommentsCounter: Field(targetCommentsCounter),
+    commentBlockHeight: Field(commentBlockHeight),
+    deletionBlockHeight: Field(deletionBlockHeight),
+    restorationBlockHeight: Field(restorationBlockHeight)
+  });
+
+  const initialUsersCommentsCounters = usersCommentsCountersMap.getRoot();
+  const userCommentsCounterWitness = usersCommentsCountersMap.getWitness(commenterAddressAsField);
+  usersCommentsCountersMap.set(commenterAddressAsField, commentState.userCommentsCounter);
+  const latestUsersCommentsCounters = usersCommentsCountersMap.getRoot();
+
+  const initialTargetsCommentsCounters = targetsCommentsCountersMap.getRoot();
+  const targetCommentsCounterWitness = targetsCommentsCountersMap.getWitness(targetKeyAsField);
+  targetsCommentsCountersMap.set(targetKeyAsField, commentState.targetCommentsCounter);
+  const latestTargetsCommentsCounters = targetsCommentsCountersMap.getRoot();
+
+  const initialComments = commentsMap.getRoot();
+  const commentKey = Poseidon.hash([targetKeyAsField, commenterAddressAsField, commentContentIDAsField]);
+  const commentWitness = commentsMap.getWitness(commentKey);
+  commentsMap.set(commentKey, commentState.hash());
+  const latestComments = commentsMap.getRoot();
+
+  const target = await prisma.posts.findUnique({
+    where: {
+      postKey: targetKey
+    }
+  });
+
+  const postState = new PostState({
+    posterAddress: PublicKey.fromBase58(target!.posterAddress),
+    postContentID: CircuitString.fromString(target!.postContentID),
+    allPostsCounter: Field(target!.allPostsCounter),
+    userPostsCounter: Field(target!.userPostsCounter),
+    postBlockHeight: Field(target!.postBlockHeight),
+    deletionBlockHeight: Field(target!.deletionBlockHeight),
+    restorationBlockHeight: Field(target!.restorationBlockHeight)
+  });
+  const targetWitness = postsMap.getWitness(targetKeyAsField);
+
+  const transition = CommentsTransition.createCommentPublishingTransition(
+    signature,
+    postsMap.getRoot(),
+    postState,
+    targetWitness,
+    commentState.allCommentsCounter.sub(1),
+    initialUsersCommentsCounters,
+    latestUsersCommentsCounters,
+    commentState.userCommentsCounter.sub(1),
+    userCommentsCounterWitness,
+    initialTargetsCommentsCounters,
+    latestTargetsCommentsCounters,
+    commentState.targetCommentsCounter.sub(1),
+    targetCommentsCounterWitness,
+    initialComments,
+    latestComments,
+    commentWitness,
+    commentState
+  );
+  console.log('Transition created');
+  
+  const proof = await Comments.proveCommentPublishingTransition(
+    transition,
+    signature,
+    postsMap.getRoot(),
+    postState,
+    targetWitness,
+    commentState.allCommentsCounter.sub(1),
+    initialUsersCommentsCounters,
+    latestUsersCommentsCounters,
+    commentState.userCommentsCounter.sub(1),
+    userCommentsCounterWitness,
+    initialTargetsCommentsCounters,
+    latestTargetsCommentsCounters,
+    commentState.targetCommentsCounter.sub(1),
+    targetCommentsCounterWitness,
+    initialComments,
+    latestComments,
+    commentWitness,
+    commentState
+  );
+  console.log('Proof created');
+
+  return {transition: transition, proof: proof};
+}
+
+// ============================================================================
+
+async function updateCommentsOnChainState(transitionsAndProofs: {
+  transition: CommentsTransition,
+  proof: CommentsProof
+}[]) {
+  let sentTxn;
+  const txn = await Mina.transaction(
+    { sender: feepayerAddress, fee: fee },
+    () => {
+      commentsContract.update(transitionsAndProofs[0].proof);
     }
   );
   await txn.prove();
