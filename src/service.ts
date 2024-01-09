@@ -249,11 +249,6 @@ server.post<{Body: SignedPost}>('/posts', async (request) => {
 // ============================================================================
 
 server.post<{Body: SignedReaction}>('/reactions', async (request) => {
-  console.log('reactions');
-
-  const signature = Signature.fromBase58(request.body.signedData.signature);
-  const reactorAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
-
   const post = await prisma.posts.findUnique({
     where: {
       postKey: request.body.signedData.data[0],
@@ -267,6 +262,8 @@ server.post<{Body: SignedReaction}>('/reactions', async (request) => {
     return `The target you are trying to react to doesn't exist`;
   }
 
+  const signature = Signature.fromBase58(request.body.signedData.signature);
+  const reactorAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
   const reactionEmojiCodePoint = Number(request.body.signedData.data[1]);
   const emojisCodePoints = ['❤️', '💔', '😂', '🤔', '😮', '😢', '😠', '😎',
     '🔥', '👀', '👍', '👎', '🙏', '🤝', '🤌', '🙌', '🤭',
@@ -287,6 +284,7 @@ server.post<{Body: SignedReaction}>('/reactions', async (request) => {
     const reactionKey = Poseidon.hash([targetKey, reactorAddressAsField, reactionCodePointAsField]);
 
     if (isSigned) {
+      console.log(String.fromCodePoint(reactionEmojiCodePoint));
       const allReactionsCounter = (await prisma.reactions.count()) + 1;
       console.log('allReactionsCounter: ' + allReactionsCounter);
 
@@ -314,6 +312,85 @@ server.post<{Body: SignedReaction}>('/reactions', async (request) => {
     }
   } else {
     return `The reaction value isn't a valid emoji`;
+  }
+});
+
+// ============================================================================
+
+server.post<{Body: SignedComment}>('/comments', async (request) => {
+
+  const post = await prisma.posts.findUnique({
+    where: {
+      postKey: request.body.signedData.data[0],
+      postBlockHeight: {
+        not: 0
+      }
+    }
+  });
+
+  if (post?.posterAddress === undefined) {
+    return `The target you are trying to react to doesn't exist`;
+  }
+
+  // Check that content and signed CID match
+  const signature = Signature.fromBase58(request.body.signedData.signature);
+  const commenterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
+  const commenterAddressAsField = Poseidon.hash(commenterAddress.toFields());
+  const posterAddressAsField = Poseidon.hash(PublicKey.fromBase58(post.posterAddress).toFields());
+  const postContentIDAsField = CircuitString.fromString(post.postContentID).hash();
+  const targetKey = Poseidon.hash([posterAddressAsField, postContentIDAsField]);
+  const commentContentIDAsField = Field(request.body.signedData.data[1]);
+  const commentContentIDAsBigInt = commentContentIDAsField.toBigInt();
+  const commentKey = Poseidon.hash([targetKey, commenterAddressAsField, commentContentIDAsField]);
+  const file = new Blob([request.body.comment]);
+  const commentCID = await getCID(file);
+  console.log('commentCID: ' + commentCID);
+  const commentCIDAsBigInt = CircuitString.fromString(commentCID.toString()).hash().toBigInt();
+  const isContentValid = commentCIDAsBigInt === commentContentIDAsBigInt;
+  console.log('Is Content Valid? ' + isContentValid);
+
+  if (isContentValid) {
+    // Check that the signature is valid
+    const isSigned = signature.verify(
+      commenterAddress,
+      [
+        targetKey,
+        CircuitString.fromString(commentCID.toString()).hash()
+      ]
+    ).toBoolean();
+    console.log('Is Signed? ' + isSigned);
+    
+    if (isSigned) {
+      console.log(request.body.comment);
+      const allCommentsCounter = (await prisma.comments.count()) + 1;
+      console.log('allCommentsCounter: ' + allCommentsCounter);
+
+      const commentsFromCommenter = await prisma.comments.findMany({
+        where: {
+          commenterAddress: commenterAddress.toBase58()
+        }
+      });
+      const userCommentsCounter = commentsFromCommenter.length + 1;
+      console.log('userCommentsCounter: ' + userCommentsCounter);
+
+      const commentsForTarget = await prisma.comments.findMany({
+        where: {
+          targetKey: targetKey.toString()
+        }
+      });
+      const targetCommentsCounter = commentsForTarget.length + 1;
+      console.log('targetCommentsCounter: ' + targetCommentsCounter);
+
+      await web3storage.uploadFile(file);
+      await createSQLComment(commentKey, targetKey, request.body.signedData.publicKey,
+        request.body.signedData.data[1], allCommentsCounter, userCommentsCounter, targetCommentsCounter,
+        request.body.signedData.signature);
+      return 'Valid Comment!';
+    } else {
+        return `Comment isn't signed`;
+    }
+  } else {
+      return `Derived post CID, doesn't match signed comment CID`;
   }
 });
 
@@ -489,6 +566,15 @@ interface SignedReaction {
 
 // ============================================================================
 
+interface SignedComment {
+  posterAddress: string,
+  postContentID: string,
+  comment: string,
+  signedData: SignedData
+}
+
+// ============================================================================
+
 const getCID = async (file: Blob) => {
   let postCID: any;
   await createFileEncoderStream(file)
@@ -547,6 +633,31 @@ const createSQLReaction = async (reactionKey: Field, targetKey: Field, reactorAd
       deletionBlockHeight: 0,
       restorationBlockHeight: 0,
       reactionSignature: signature
+    }
+  });
+}
+
+// ============================================================================
+
+const createSQLComment = async (commentKey: Field, targetKey: Field, commenterAddress: string,
+  commentContentID: string, allCommentsCounter: number,
+  userCommentsCounter: number, targetCommentsCounter:number,
+  signature: string) => {
+
+  await prisma.comments.create({
+    data: {
+      commentKey: commentKey.toString(),
+      isTargetPost: true,
+      targetKey: targetKey.toString(),
+      commenterAddress: commenterAddress,
+      commentContentID: commentContentID,
+      allCommentsCounter: allCommentsCounter,
+      userCommentsCounter: userCommentsCounter,
+      targetCommentsCounter: targetCommentsCounter,
+      commentBlockHeight: 0,
+      deletionBlockHeight: 0,
+      restorationBlockHeight: 0,
+      commentSignature: signature
     }
   });
 }
