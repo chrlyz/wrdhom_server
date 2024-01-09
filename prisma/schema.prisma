@@ -33,3 +33,18 @@ model reactions {
   restorationBlockHeight BigInt
   reactionSignature      String
 }
+
+model comments {
+  commentKey             String  @id
+  isTargetPost           Boolean
+  targetKey              String
+  commenterAddress       String
+  commentContentID       String
+  allCommentsCounter     BigInt
+  userCommentsCounter    BigInt
+  targetCommentsCounter  BigInt
+  commentBlockHeight     BigInt
+  deletionBlockHeight    BigInt
+  restorationBlockHeight BigInt
+  commentSignature       String
+}
