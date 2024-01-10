@@ -12,6 +12,7 @@ config.json
 
 # Content
 /posts
+/comments
 
 # Editor
 .vscode
