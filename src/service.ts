@@ -6,8 +6,9 @@ import { createFileEncoderStream, CAREncoderStream } from 'ipfs-car';
 import { Blob } from '@web-std/file';
 import { create } from '@web3-storage/w3up-client';
 import * as dotenv from 'dotenv';
-import { regeneratePostsZkAppState, regenerateReactionsZkAppState } from './utils/state.js';
-import { PostState, ReactionState } from 'wrdhom';
+import { regeneratePostsZkAppState, regenerateReactionsZkAppState,
+  regenerateCommentsZkAppState } from './utils/state.js';
+import { CommentState, PostState, ReactionState } from 'wrdhom';
 import fs from 'fs/promises';
 import { fastifySchedule } from '@fastify/schedule';
 import { SimpleIntervalJob, AsyncTask } from 'toad-scheduler';
@@ -61,7 +62,22 @@ const reactionsContext = {
 
 await regenerateReactionsZkAppState(reactionsContext);
 
-// Get posts content and keep it locally for faster reponses
+const usersCommentsCountersMap = new MerkleMap();
+const targetsCommentsCountersMap =  new MerkleMap();
+const commentsMap = new MerkleMap();
+let numberOfComments = 0;
+
+const commentsContext = {
+  prisma: prisma,
+  usersCommentsCountersMap: usersCommentsCountersMap,
+  targetsCommentsCountersMap: targetsCommentsCountersMap,
+  commentsMap: commentsMap,
+  numberOfComments: numberOfComments
+}
+
+const comments = await regenerateCommentsZkAppState(commentsContext);
+
+// Get content and keep it locally for faster reponses
 
 try {
   await fs.access('./posts/');
@@ -83,6 +99,32 @@ for (const post of posts) {
         const contentResponse = await fetch('https://' + post.postContentID + '.ipfs.w3s.link');
         const content = await contentResponse.text();
         await fs.writeFile('./posts/' + post.postContentID, content, 'utf-8');
+      } else {
+          console.error(e);
+      }
+  }
+};
+
+try {
+  await fs.access('./comments/');
+  console.log('./comments/ directory exists');
+} catch (e: any) {
+  if (e.code === 'ENOENT') {
+    await fs.mkdir('./comments/');
+    console.log('./comments/ directory created');
+  } else {
+    console.error(e);
+  }
+}
+
+for (const comment of comments) {
+  try {
+    await fs.readFile('./comments/' + comment.commentContentID, 'utf8');
+  } catch (e: any) {
+      if (e.code === 'ENOENT') {
+        const commentsContentResponse = await fetch('https://' + comment.commentContentID + '.ipfs.w3s.link');
+        const commentsContent = await commentsContentResponse.text();
+        await fs.writeFile('./comments/' + comment.commentContentID, commentsContent, 'utf-8');
       } else {
           console.error(e);
       }
@@ -117,10 +159,9 @@ const syncStateTask = new AsyncTask(
       }
     });
     for (const pPost of pendingPosts) {
-      const contentResponse = await fetch('https://' + pPost.postContentID + '.ipfs.w3s.link');
-      const content = await contentResponse.text();
-      await fs.writeFile('./posts/' + pPost.postContentID, content, 'utf-8');
-
+      const postContentResponse = await fetch('https://' + pPost.postContentID + '.ipfs.w3s.link');
+      const postContent = await postContentResponse.text();
+      await fs.writeFile('./posts/' + pPost.postContentID, postContent, 'utf-8');
       console.log(pPost);
       const postState = new PostState({
         posterAddress: PublicKey.fromBase58(pPost.posterAddress),
@@ -152,7 +193,6 @@ const syncStateTask = new AsyncTask(
     });
     for (const pReaction of pendingReactions) {
       const reactorAddress = PublicKey.fromBase58(pReaction.reactorAddress);
-      const reactorAddressAsField = Poseidon.hash(reactorAddress.toFields());
       const reactionCodePointAsField = Field(pReaction.reactionCodePoint);
       
       console.log(pReaction);
@@ -172,6 +212,45 @@ const syncStateTask = new AsyncTask(
       const reactionKey = Field(pReaction.reactionKey);
       reactionsMap.set(reactionKey, reactionState.hash());
       reactionsContext.numberOfRections += 1;
+    }
+
+    const pendingComments = await prisma.comments.findMany({
+      orderBy: {
+        allCommentsCounter: 'asc'
+      },
+      where: {
+        allCommentsCounter: {
+          gt: reactionsContext.numberOfRections
+        },
+        commentBlockHeight: {
+          not: 0
+        }
+      }
+    });
+    for (const pComment of pendingComments) {
+      const commentContentResponse = await fetch('https://' + pComment.commentContentID + '.ipfs.w3s.link');
+      const commentContent = await commentContentResponse.text();
+      await fs.writeFile('./comments/' + pComment.commentContentID, commentContent, 'utf-8');
+      const commenterAddress = PublicKey.fromBase58(pComment.commenterAddress);
+      const commentContentIDAsCS = CircuitString.fromString(pComment.commentContentID);
+      
+      console.log(pComment);
+      const commentState = new CommentState({
+        isTargetPost: Bool(pComment.isTargetPost),
+        targetKey: Field(pComment.targetKey),
+        commenterAddress: commenterAddress,
+        commentContentID: commentContentIDAsCS,
+        allCommentsCounter: Field(pComment.allCommentsCounter),
+        userCommentsCounter: Field(pComment.userCommentsCounter),
+        targetCommentsCounter: Field(pComment.targetCommentsCounter),
+        commentBlockHeight: Field(pComment.commentBlockHeight),
+        deletionBlockHeight: Field(pComment.deletionBlockHeight),
+        restorationBlockHeight: Field(pComment.restorationBlockHeight)
+      });
+
+      const reactionKey = Field(pComment.commentKey);
+      commentsMap.set(reactionKey, commentState.hash());
+      commentsContext.numberOfComments += 1;
     }
   },
   (e) => {console.error(e)}
@@ -445,18 +524,19 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
 
     const postsResponse: {
       postState: string,
+      postKey: string,
       postContentID: string,
       content: string,
       postWitness: JSON,
       reactionsResponse: {
         reactionState: string,
         reactionWitness: JSON
-      }[]
+      }[],
+      numberOfComments: number
     }[] = [];
 
     for (const post of posts) {
       const posterAddress = PublicKey.fromBase58(post.posterAddress);
-      const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
       const postContentID = CircuitString.fromString(post.postContentID);
       const postKey = Field(post.postKey);
       const postWitness = postsMap.getWitness(postKey).toJSON();
@@ -515,12 +595,24 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         })
       }
 
+      const postComemnts = await prisma.comments.findMany({
+        where: {
+          targetKey: post.postKey,
+          commentBlockHeight: {
+            not: 0
+          }
+        }
+      });
+      const numberOfComments = postComemnts.length;
+
       postsResponse.push({
         postState: JSON.stringify(postState),
+        postKey: post.postKey,
         postContentID: post.postContentID,
         content: content,
         postWitness: postWitness,
-        reactionsResponse: reactionsResponse
+        reactionsResponse: reactionsResponse,
+        numberOfComments: numberOfComments
       })
     };
 
@@ -529,6 +621,73 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
     return postsResponse;
   } catch(e) {
       console.error(e);
+  }
+});
+
+// ============================================================================
+
+server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
+  try {
+    const { targetKey, howMany, fromBlock, toBlock } = request.query;
+
+    const comments = await prisma.comments.findMany({
+      take: Number(howMany),
+      orderBy: {
+        targetCommentsCounter: 'desc'
+      },
+      where: {
+        targetKey: targetKey,
+        commentBlockHeight: {
+          not: 0,
+          gte: fromBlock,
+          lte: toBlock
+        }
+      }
+    });
+
+    const commentsResponse: {
+      commentState: string,
+      commentKey: string,
+      commentContentID: string,
+      content: string,
+      commentWitness: JSON,
+    }[] = [];
+
+    for (const comment of comments) {
+      const commenterAddress = PublicKey.fromBase58(comment.commenterAddress);
+      const commentContentID = CircuitString.fromString(comment.commentContentID);
+      const commentKey = Field(comment.commentKey);
+      const commentWitness = commentsMap.getWitness(commentKey).toJSON();
+      const content = await fs.readFile('./comments/' + comment.commentContentID, 'utf8');
+
+      const commentState = new CommentState({
+        isTargetPost: Bool(comment.isTargetPost),
+        targetKey: Field(comment.targetKey),
+        commenterAddress: commenterAddress,
+        commentContentID: commentContentID,
+        allCommentsCounter: Field(comment.allCommentsCounter),
+        userCommentsCounter: Field(comment.userCommentsCounter),
+        commentBlockHeight: Field(comment.commentBlockHeight),
+        targetCommentsCounter: Field(comment.targetCommentsCounter),
+        deletionBlockHeight: Field(comment.deletionBlockHeight),
+        restorationBlockHeight: Field(comment.restorationBlockHeight)
+      });
+
+      commentsResponse.push({
+        commentState: JSON.stringify(commentState),
+        commentKey: comment.commentKey,
+        commentContentID: comment.commentContentID,
+        content: content,
+        commentWitness: commentWitness,
+      });
+    };
+
+    console.log(commentsResponse);
+
+    return commentsResponse;
+
+  } catch (e) {
+    console.log(e)
   }
 });
 
@@ -571,6 +730,15 @@ interface SignedComment {
   postContentID: string,
   comment: string,
   signedData: SignedData
+}
+
+// ============================================================================
+
+interface CommentsQuery {
+  targetKey: string,
+  howMany: number,
+  fromBlock: number,
+  toBlock: number
 }
 
 // ============================================================================
