@@ -48,3 +48,17 @@ model comments {
   restorationBlockHeight BigInt
   commentSignature       String
 }
+
+model reposts {
+  repostKey              String  @id
+  isTargetPost           Boolean
+  targetKey              String
+  reposterAddress        String
+  allRepostsCounter      BigInt
+  userRepostsCounter     BigInt
+  targetRepostsCounter   BigInt
+  repostBlockHeight      BigInt
+  deletionBlockHeight    BigInt
+  restorationBlockHeight BigInt
+  repostSignature        String
+}
