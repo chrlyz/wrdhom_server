@@ -8,7 +8,7 @@ import { create } from '@web3-storage/w3up-client';
 import * as dotenv from 'dotenv';
 import { regeneratePostsZkAppState, regenerateReactionsZkAppState,
   regenerateCommentsZkAppState } from './utils/state.js';
-import { CommentState, PostState, ReactionState } from 'wrdhom';
+import { CommentState, PostState, ReactionState, fieldToFlagTargetAsReposted } from 'wrdhom';
 import fs from 'fs/promises';
 import { fastifySchedule } from '@fastify/schedule';
 import { SimpleIntervalJob, AsyncTask } from 'toad-scheduler';
@@ -327,10 +327,10 @@ server.post<{Body: SignedPost}>('/posts', async (request) => {
 
 // ============================================================================
 
-server.post<{Body: SignedReaction}>('/reactions', async (request) => {
+server.post<{Body: SignedData}>('/reactions', async (request) => {
   const post = await prisma.posts.findUnique({
     where: {
-      postKey: request.body.signedData.data[0],
+      postKey: request.body.data[0],
       postBlockHeight: {
         not: 0
       }
@@ -341,9 +341,9 @@ server.post<{Body: SignedReaction}>('/reactions', async (request) => {
     return `The target you are trying to react to doesn't exist`;
   }
 
-  const signature = Signature.fromBase58(request.body.signedData.signature);
-  const reactorAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
-  const reactionEmojiCodePoint = Number(request.body.signedData.data[1]);
+  const signature = Signature.fromBase58(request.body.signature);
+  const reactorAddress = PublicKey.fromBase58(request.body.publicKey);
+  const reactionEmojiCodePoint = Number(request.body.data[1]);
   const emojisCodePoints = ['❤️', '💔', '😂', '🤔', '😮', '😢', '😠', '😎',
     '🔥', '👀', '👍', '👎', '🙏', '🤝', '🤌', '🙌', '🤭',
     '😳', '😭', '🤯', '😡', '👽', '😈', '💀', '💯'
@@ -356,7 +356,7 @@ server.post<{Body: SignedReaction}>('/reactions', async (request) => {
     const targetKey = Poseidon.hash([posterAddressAsField, postContentIDAsField]);
     const isSigned = signature.verify(reactorAddress, [
       targetKey,
-      Field(request.body.signedData.data[1])
+      Field(request.body.data[1])
     ]).toBoolean();
     const reactorAddressAsField = Poseidon.hash(reactorAddress.toFields());
     const reactionCodePointAsField = Field(reactionEmojiCodePoint);
@@ -383,8 +383,8 @@ server.post<{Body: SignedReaction}>('/reactions', async (request) => {
       const targetReactionsCounter = reactionsForTarget.length + 1;
       console.log('targetReactionsCounter: ' + targetReactionsCounter);
 
-      await createSQLReaction(reactionKey, targetKey, request.body.signedData.publicKey, reactionEmojiCodePoint,
-        allReactionsCounter, userReactionsCounter, targetReactionsCounter, request.body.signedData.signature)
+      await createSQLReaction(reactionKey, targetKey, request.body.publicKey, reactionEmojiCodePoint,
+        allReactionsCounter, userReactionsCounter, targetReactionsCounter, request.body.signature);
       return 'Valid Reaction!';
     } else {
       return 'Reaction message is not signed';
@@ -475,6 +475,61 @@ server.post<{Body: SignedComment}>('/comments', async (request) => {
 
 // ============================================================================
 
+server.post<{Body: SignedData}>('/reposts', async (request) => {
+  const post = await prisma.posts.findUnique({
+    where: {
+      postKey: request.body.data[0],
+      postBlockHeight: {
+        not: 0
+      }
+    }
+  });
+
+  if (post?.posterAddress === undefined) {
+    return `The target you are trying to react to doesn't exist`;
+  }
+
+  const signature = Signature.fromBase58(request.body.signature);
+  const reposterAddress = PublicKey.fromBase58(request.body.publicKey);
+  const targetKey = Field(request.body.data[0]);
+  const isSigned = signature.verify(reposterAddress, [
+    targetKey,
+    fieldToFlagTargetAsReposted
+  ]).toBoolean();
+  const reposterAddressAsField = Poseidon.hash(reposterAddress.toFields());
+  const repostKey = Poseidon.hash([targetKey, reposterAddressAsField]);
+
+  if (isSigned) {
+    console.log(request.body.data[0]);
+    const allRepostsCounter = (await prisma.reposts.count()) + 1;
+    console.log('allRepostsCounter: ' + allRepostsCounter);
+
+    const repostsFromReposter = await prisma.reposts.findMany({
+      where: {
+        reposterAddress: reposterAddress.toBase58()
+      }
+    });
+    const userRepostsCounter = repostsFromReposter.length + 1;
+    console.log('userRepostsCounter: ' + userRepostsCounter);
+
+    const repostsForTarget = await prisma.reposts.findMany({
+      where: {
+        targetKey: targetKey.toString()
+      }
+    });
+    const targetRepostsCounter = repostsForTarget.length + 1;
+    console.log('targetRepostsCounter: ' + targetRepostsCounter);
+
+    await createSQLRepost(repostKey, targetKey, request.body.publicKey, allRepostsCounter,
+      userRepostsCounter, targetRepostsCounter, request.body.signature);
+    return 'Valid Repost!';
+  } else {
+    return 'Repost message is not signed';
+  }
+});
+
+// ============================================================================
+
 server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
   try {
     const { howMany, fromBlock, toBlock, posterAddress } = request.query;
@@ -489,7 +544,6 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       restorationBlockHeight: bigint;
       postSignature: string;
     }[];
-    console.log(posterAddress)
 
     if (posterAddress === undefined) {
       posts = await prisma.posts.findMany({
@@ -616,8 +670,6 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       })
     };
 
-    console.log(postsResponse);
-
     return postsResponse;
   } catch(e) {
       console.error(e);
@@ -682,8 +734,6 @@ server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
       });
     };
 
-    console.log(commentsResponse);
-
     return commentsResponse;
 
   } catch (e) {
@@ -708,28 +758,18 @@ interface SignedPost {
 
 // ============================================================================
 
+interface SignedComment {
+  comment: string,
+  signedData: SignedData
+}
+
+// ============================================================================
+
 interface PostsQuery {
   howMany: number,
   fromBlock: number,
   toBlock: number,
   posterAddress: string
-}
-
-// ============================================================================
-
-interface SignedReaction {
-  posterAddress: string,
-  postContentID: string,
-  signedData: SignedData
-}
-
-// ============================================================================
-
-interface SignedComment {
-  posterAddress: string,
-  postContentID: string,
-  comment: string,
-  signedData: SignedData
 }
 
 // ============================================================================
@@ -826,6 +866,29 @@ const createSQLComment = async (commentKey: Field, targetKey: Field, commenterAd
       deletionBlockHeight: 0,
       restorationBlockHeight: 0,
       commentSignature: signature
+    }
+  });
+}
+
+// ============================================================================
+
+const createSQLRepost = async (repostKey: Field, targetKey: Field, reposterAddress: string,
+  allRepostsCounter: number, userRepostsCounter: number, targetRepostsCounter:number,
+  signature: string) => {
+
+  await prisma.reposts.create({
+    data: {
+      repostKey: repostKey.toString(),
+      isTargetPost: true,
+      targetKey: targetKey.toString(),
+      reposterAddress: reposterAddress,
+      allRepostsCounter: allRepostsCounter,
+      userRepostsCounter: userRepostsCounter,
+      targetRepostsCounter: targetRepostsCounter,
+      repostBlockHeight: 0,
+      deletionBlockHeight: 0,
+      restorationBlockHeight: 0,
+      repostSignature: signature
     }
   });
 }
