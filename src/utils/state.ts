@@ -342,6 +342,7 @@ export async function regenerateRepostsZkAppState(context: {
     const reposterAddress = PublicKey.fromBase58(repost.reposterAddress);
     const reposterAddressAsField = Poseidon.hash(reposterAddress.toFields());
     const targetKey = Field(repost.targetKey);
+    const repostKey = Poseidon.hash([targetKey, reposterAddressAsField]);
 
     const repostState = new RepostState({
       isTargetPost: Bool(repost.isTargetPost),
@@ -356,7 +357,7 @@ export async function regenerateRepostsZkAppState(context: {
     });
     console.log('Initial repostsMap root: ' + context.repostsMap.getRoot().toString());
     context.repostsMap.set(
-      Poseidon.hash([targetKey, reposterAddressAsField]),
+      repostKey,
       repostState.hash()
     );
     console.log('Latest repostsMap root: ' + context.repostsMap.getRoot().toString());
