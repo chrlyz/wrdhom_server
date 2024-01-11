@@ -5,14 +5,20 @@ import { Config, PostState, PostsTransition, Posts,
   PostsContract, PostsProof, ReactionState,
   ReactionsTransition, Reactions, ReactionsContract,
   ReactionsProof, CommentState, CommentsTransition, Comments,
-  CommentsContract, CommentsProof
+  CommentsContract, CommentsProof, Reposts, RepostsContract,
+  RepostsTransition, RepostsProof, RepostState
 } from 'wrdhom';
 import fs from 'fs/promises';
 import { performance } from 'perf_hooks';
 import { PrismaClient } from '@prisma/client';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { regenerateCommentsZkAppState, regeneratePostsZkAppState, regenerateReactionsZkAppState } from './utils/state.js';
+import {
+  regenerateCommentsZkAppState,
+  regeneratePostsZkAppState,
+  regenerateReactionsZkAppState,
+  regenerateRepostsZkAppState
+} from './utils/state.js';
 
 // ============================================================================
 
@@ -26,6 +32,7 @@ const configJson: Config = JSON.parse(await fs.readFile('config.json', 'utf8'));
 const configPosts = configJson.deployAliases['posts'];
 const configReactions = configJson.deployAliases['reactions'];
 const configComments = configJson.deployAliases['comments'];
+const configReposts = configJson.deployAliases['reposts'];
 const Network = Mina.Network(configPosts.url);
 Mina.setActiveInstance(Network);
 const fee = Number(configPosts.fee) * 1e9; // in nanomina (1 billion = 1.0 mina)
@@ -37,19 +44,24 @@ const reactionsContractKeysBase58: { publicKey: string } =
   JSON.parse(await fs.readFile(configReactions.keyPath, 'utf8'));
 const commentsContractKeysBase58: { publicKey: string } =
   JSON.parse(await fs.readFile(configComments.keyPath, 'utf8'));
+const repostsContractKeysBase58: { publicKey: string } =
+  JSON.parse(await fs.readFile(configReposts.keyPath, 'utf8'));
 const feepayerKey = PrivateKey.fromBase58(feepayerKeysBase58.privateKey);
 const feepayerAddress =   PublicKey.fromBase58(feepayerKeysBase58.publicKey);
 const postsContractAddress = PublicKey.fromBase58(postsContractKeysBase58.publicKey);
 const reactionsContractAddress = PublicKey.fromBase58(reactionsContractKeysBase58.publicKey);
 const commentsContractAddress = PublicKey.fromBase58(commentsContractKeysBase58.publicKey);
+const repostsContractAddress = PublicKey.fromBase58(repostsContractKeysBase58.publicKey);
 // Fetch accounts to make sure they are available on cache during the execution of the program
 await fetchAccount({ publicKey: feepayerKeysBase58.publicKey });
 await fetchAccount({ publicKey: postsContractKeysBase58.publicKey });
 await fetchAccount({ publicKey: reactionsContractKeysBase58.publicKey });
 await fetchAccount({publicKey: commentsContractKeysBase58.publicKey});
+await fetchAccount({publicKey: repostsContractKeysBase58.publicKey});
 const postsContract = new PostsContract(postsContractAddress);
 const reactionsContract = new ReactionsContract(reactionsContractAddress);
 const commentsContract = new CommentsContract(commentsContractAddress);
+const repostsContract = new RepostsContract(repostsContractAddress);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -68,6 +80,10 @@ console.log('Compiling Comments ZkProgram...');
 await Comments.compile({cache: Cache.FileSystem(cachePath)});
 console.log('Compiling CommentsContract...');
 await CommentsContract.compile({cache: Cache.FileSystem(cachePath)});
+console.log('Compiling Reposts ZkProgram...');
+await Reposts.compile({cache: Cache.FileSystem(cachePath)});
+console.log('Compiling RepostsContract...');
+await RepostsContract.compile({cache: Cache.FileSystem(cachePath)});
 console.log('Compiled');
 let endTime = performance.now();
 console.log(`${(endTime - startTime)/1000/60} minutes`);
@@ -90,14 +106,14 @@ await regeneratePostsZkAppState(postsContext);
 const usersReactionsCountersMap = new MerkleMap();
 const targetsReactionsCountersMap =  new MerkleMap();
 const reactionsMap = new MerkleMap();
-let numberOfRections = 0;
+let numberOfReactions = 0;
 
 const reactionsContext = {
   prisma: prisma,
   usersReactionsCountersMap: usersReactionsCountersMap,
   targetsReactionsCountersMap: targetsReactionsCountersMap,
   reactionsMap: reactionsMap,
-  numberOfRections: numberOfRections
+  numberOfReactions: numberOfReactions
 }
 
 await regenerateReactionsZkAppState(reactionsContext);
@@ -117,9 +133,25 @@ const commentsContext = {
 
 await regenerateCommentsZkAppState(commentsContext);
 
+const usersRepostsCountersMap = new MerkleMap();
+const targetsRepostsCountersMap =  new MerkleMap();
+const repostsMap = new MerkleMap();
+let numberOfReposts = 0;
+
+const repostsContext = {
+  prisma: prisma,
+  usersRepostsCountersMap: usersRepostsCountersMap,
+  targetsRepostsCountersMap: targetsRepostsCountersMap,
+  repostsMap: repostsMap,
+  numberOfReposts: numberOfReposts
+}
+
+await regenerateRepostsZkAppState(repostsContext);
+
 const provingPosts = 0;
 const provingReactions = 1;
 const provingComments = 2;
+const provingReposts = 3;
 let provingTurn = 0;
 
 while (true) {
@@ -268,8 +300,8 @@ while (true) {
           reactionBlockHeight: 0
       }
       });
-      reactionsContext.numberOfRections += pendingReactions.length;
-      console.log('Number of reactions if update is successful: ' + reactionsContext.numberOfRections);
+      reactionsContext.numberOfReactions += pendingReactions.length;
+      console.log('Number of reactions if update is successful: ' + reactionsContext.numberOfReactions);
       console.log('pendingReactions:');
       console.log(pendingReactions);
     
@@ -327,17 +359,17 @@ while (true) {
           reactionsFetch = await reactionsContract.reactions.fetch();
           console.log('reactionsFetch: ' + reactionsFetch?.toString());
     
-          console.log(Field(reactionsContext.numberOfRections).toString());
+          console.log(Field(reactionsContext.numberOfReactions).toString());
           console.log(usersReactionsCountersMap.getRoot().toString());
           console.log(targetsReactionsCountersMap.getRoot().toString());
           console.log(reactionsMap.getRoot().toString());
     
-          console.log(allReactionsCounterFetch?.equals(Field(reactionsContext.numberOfRections)).toBoolean());
+          console.log(allReactionsCounterFetch?.equals(Field(reactionsContext.numberOfReactions)).toBoolean());
           console.log(userReactionsCounterFetch?.equals(usersReactionsCountersMap.getRoot()).toBoolean());
           console.log(targetReactionsCounterFetch?.equals(targetsReactionsCountersMap.getRoot()).toBoolean());
           console.log(reactionsFetch?.equals(reactionsMap.getRoot()).toBoolean());
     
-          if (allReactionsCounterFetch?.equals(Field(reactionsContext.numberOfRections)).toBoolean()
+          if (allReactionsCounterFetch?.equals(Field(reactionsContext.numberOfReactions)).toBoolean()
           && userReactionsCounterFetch?.equals(usersReactionsCountersMap.getRoot()).toBoolean()
           && targetReactionsCounterFetch?.equals(targetsReactionsCountersMap.getRoot()).toBoolean()
           && reactionsFetch?.equals(reactionsMap.getRoot()).toBoolean()) {
@@ -355,7 +387,7 @@ while (true) {
           }
           // Reset initial state if transaction appears to have failed
           if (tries === maxTries - 1) {
-            reactionsContext.numberOfRections -= pendingReactions.length;
+            reactionsContext.numberOfReactions -= pendingReactions.length;
             console.log('Original number of reactions: ' + postsContext.numberOfPosts);
     
             const pendingReactors = new Set(pendingReactions.map( reaction => reaction.reactorAddress));
@@ -568,9 +600,164 @@ while (true) {
         await delay(10000);
       }
 
+  } else if (provingTurn === provingReposts) {
+
+    const pendingReposts = await prisma.reposts.findMany({
+      take: 1,
+      orderBy: {
+          allRepostsCounter: 'asc'
+      },
+      where: {
+          repostBlockHeight: 0
+      }
+      });
+      repostsContext.numberOfReposts += pendingReposts.length;
+      console.log('Number of reposts if update is successful: ' + repostsContext.numberOfReposts);
+      console.log('pendingReposts:');
+      console.log(pendingReposts);
+    
+      startTime = performance.now();
+    
+      const lastBlock = await fetchLastBlock(configReposts.url);
+      const repostBlockHeight = lastBlock.blockchainLength.toBigint();
+      console.log(repostBlockHeight);
+    
+      const transitionsAndProofs: {
+        transition: RepostsTransition,
+        proof: RepostsProof
+      }[] = [];
+    
+      for (const pRepost of pendingReposts) {
+        const result = await proveRepost(
+          pRepost.isTargetPost,
+          pRepost.targetKey,
+          pRepost.reposterAddress,
+          pRepost.allRepostsCounter,
+          pRepost.userRepostsCounter,
+          pRepost.targetRepostsCounter,
+          repostBlockHeight,
+          pRepost.deletionBlockHeight,
+          pRepost.restorationBlockHeight,
+          pRepost.repostSignature
+        );
+    
+        transitionsAndProofs.push(result);
+      }
+    
+      if (transitionsAndProofs.length !== 0) {
+        await updateRepostsOnChainState(transitionsAndProofs);
+    
+        endTime = performance.now();
+        console.log(`${(endTime - startTime)/1000/60} minutes`);
+    
+        let tries = 0;
+        const maxTries = 50;
+        let allRepostsCounterFetch;
+        let userRepostsCounterFetch;
+        let targetRepostsCounterFetch;
+        let repostsFetch;
+        while (tries < maxTries) {
+          console.log('Pause to wait for the transaction to confirm...');
+          await delay(20000);
+    
+          allRepostsCounterFetch = await repostsContract.allRepostsCounter.fetch();
+          console.log('allRepostsCounterFetch: ' + allRepostsCounterFetch?.toString());
+          userRepostsCounterFetch = await repostsContract.usersRepostsCounters.fetch();
+          console.log('userRepostsCounterFetch: ' + userRepostsCounterFetch?.toString());
+          targetRepostsCounterFetch = await repostsContract.targetsRepostsCounters.fetch();
+          console.log('targetRepostsCounterFetch: ' + targetRepostsCounterFetch?.toString());
+          repostsFetch = await repostsContract.reposts.fetch();
+          console.log('repostsFetch: ' + repostsFetch?.toString());
+    
+          console.log(Field(repostsContext.numberOfReposts).toString());
+          console.log(usersRepostsCountersMap.getRoot().toString());
+          console.log(targetsRepostsCountersMap.getRoot().toString());
+          console.log(repostsMap.getRoot().toString());
+    
+          console.log(allRepostsCounterFetch?.equals(Field(repostsContext.numberOfReposts)).toBoolean());
+          console.log(userRepostsCounterFetch?.equals(usersRepostsCountersMap.getRoot()).toBoolean());
+          console.log(targetRepostsCounterFetch?.equals(targetsRepostsCountersMap.getRoot()).toBoolean());
+          console.log(repostsFetch?.equals(repostsMap.getRoot()).toBoolean());
+    
+          if (allRepostsCounterFetch?.equals(Field(repostsContext.numberOfReposts)).toBoolean()
+          && userRepostsCounterFetch?.equals(usersRepostsCountersMap.getRoot()).toBoolean()
+          && targetRepostsCounterFetch?.equals(targetsRepostsCountersMap.getRoot()).toBoolean()
+          && repostsFetch?.equals(repostsMap.getRoot()).toBoolean()) {
+            for (const pRepost of pendingReposts) {
+              await prisma.reposts.update({
+                  where: {
+                    repostKey: pRepost.repostKey
+                  },
+                  data: {
+                    repostBlockHeight: repostBlockHeight
+                  }
+              });
+            }
+            tries = maxTries;
+          }
+          // Reset initial state if transaction appears to have failed
+          if (tries === maxTries - 1) {
+            repostsContext.numberOfReposts -= pendingReposts.length;
+            console.log('Original number of reposts: ' + postsContext.numberOfPosts);
+    
+            const pendingReposters = new Set(pendingReposts.map( repost => repost.reposterAddress));
+            for (const reposter of pendingReposters) {
+              const userReposts = await prisma.reposts.findMany({
+                where: {
+                  reposterAddress: reposter,
+                  repostBlockHeight: {
+                    not: 0
+                  }
+                }
+              });
+              console.log(userReposts);
+              console.log('Initial usersRepostsCountersMap root: ' + usersRepostsCountersMap.getRoot().toString());
+              usersRepostsCountersMap.set(
+                Poseidon.hash(PublicKey.fromBase58(reposter).toFields()),
+                Field(userReposts.length)
+              );
+              console.log(userReposts.length);
+              console.log('Latest usersRepostsCountersMap root: ' + usersRepostsCountersMap.getRoot().toString());
+            };
+
+            const pendingTargets = new Set(pendingReposts.map( repost => repost.targetKey));
+            for (const target of pendingTargets) {
+              const targetReposts = await prisma.reposts.findMany({
+                where: {
+                  targetKey: target,
+                  repostBlockHeight: {
+                    not: 0
+                  }
+                }
+              })
+              console.log('Initial targetsRepostsCountersMap root: ' + targetsRepostsCountersMap.getRoot().toString());
+              targetsRepostsCountersMap.set(
+                Field(target),
+                Field(targetReposts.length)
+              );
+              console.log(targetReposts.length);
+              console.log('Latest targetsRepostsCountersMap root: ' + targetsRepostsCountersMap.getRoot().toString());
+            }
+
+            pendingReposts.forEach( pRepost => {
+              console.log('Initial repostsMap root: ' + repostsMap.getRoot().toString());
+              repostsMap.set(
+                  Field(pRepost.repostKey),
+                  Field(0)
+              );
+              console.log('Latest repostsMap root: ' + repostsMap.getRoot().toString());
+            });
+          }
+          tries++;
+        }
+      } else {
+        console.log('Pause to wait for new actions before running loop again...');
+        await delay(10000);
+      }
+
   }
   provingTurn++;
-  if (provingTurn > provingComments) {
+  if (provingTurn > provingReposts) {
     provingTurn = 0;
   }
 }
@@ -945,6 +1132,133 @@ async function updateCommentsOnChainState(transitionsAndProofs: {
     { sender: feepayerAddress, fee: fee },
     () => {
       commentsContract.update(transitionsAndProofs[0].proof);
+    }
+  );
+  await txn.prove();
+  sentTxn = await txn.sign([feepayerKey]).send();
+
+  if (sentTxn?.hash() !== undefined) {
+    console.log(`https://minascan.io/berkeley/tx/${sentTxn.hash()}`);
+  }
+
+  return sentTxn;
+}
+
+// ============================================================================
+
+async function proveRepost(isTargetPost: boolean, targetKey: string,
+  reposterAddressBase58: string, allRepostsCounter: bigint,
+  userRepostsCounter: bigint, targetRepostsCounter: bigint,
+  repostBlockHeight: bigint, deletionBlockHeight: bigint,
+  restorationBlockHeight: bigint, signatureBase58: string) {
+
+  const reposterAddress = PublicKey.fromBase58(reposterAddressBase58);
+  const reposterAddressAsField = Poseidon.hash(reposterAddress.toFields());
+  const targetKeyAsField = Field(targetKey);
+  const signature = Signature.fromBase58(signatureBase58);
+
+  const repostState = new RepostState({
+    isTargetPost: Bool(isTargetPost),
+    targetKey: targetKeyAsField,
+    reposterAddress: reposterAddress,
+    allRepostsCounter: Field(allRepostsCounter),
+    userRepostsCounter: Field(userRepostsCounter),
+    targetRepostsCounter: Field(targetRepostsCounter),
+    repostBlockHeight: Field(repostBlockHeight),
+    deletionBlockHeight: Field(deletionBlockHeight),
+    restorationBlockHeight: Field(restorationBlockHeight)
+  });
+
+  const initialUsersRepostsCounters = usersRepostsCountersMap.getRoot();
+  const userRepostsCounterWitness = usersRepostsCountersMap.getWitness(reposterAddressAsField);
+  usersRepostsCountersMap.set(reposterAddressAsField, repostState.userRepostsCounter);
+  const latestUsersRepostsCounters = usersRepostsCountersMap.getRoot();
+
+  const initialTargetsRepostsCounters = targetsRepostsCountersMap.getRoot();
+  const targetRepostsCounterWitness = targetsRepostsCountersMap.getWitness(targetKeyAsField);
+  targetsRepostsCountersMap.set(targetKeyAsField, repostState.targetRepostsCounter);
+  const latestTargetsRepostsCounters = targetsRepostsCountersMap.getRoot();
+
+  const initialReposts = repostsMap.getRoot();
+  const repostKey = Poseidon.hash([targetKeyAsField, reposterAddressAsField]);
+  const repostWitness = repostsMap.getWitness(repostKey);
+  repostsMap.set(repostKey, repostState.hash());
+  const latestReposts = repostsMap.getRoot();
+
+  const target = await prisma.posts.findUnique({
+    where: {
+      postKey: targetKey
+    }
+  });
+
+  const postState = new PostState({
+    posterAddress: PublicKey.fromBase58(target!.posterAddress),
+    postContentID: CircuitString.fromString(target!.postContentID),
+    allPostsCounter: Field(target!.allPostsCounter),
+    userPostsCounter: Field(target!.userPostsCounter),
+    postBlockHeight: Field(target!.postBlockHeight),
+    deletionBlockHeight: Field(target!.deletionBlockHeight),
+    restorationBlockHeight: Field(target!.restorationBlockHeight)
+  });
+  const targetWitness = postsMap.getWitness(targetKeyAsField);
+
+  const transition = RepostsTransition.createRepostPublishingTransition(
+    signature,
+    postsMap.getRoot(),
+    postState,
+    targetWitness,
+    repostState.allRepostsCounter.sub(1),
+    initialUsersRepostsCounters,
+    latestUsersRepostsCounters,
+    repostState.userRepostsCounter.sub(1),
+    userRepostsCounterWitness,
+    initialTargetsRepostsCounters,
+    latestTargetsRepostsCounters,
+    repostState.targetRepostsCounter.sub(1),
+    targetRepostsCounterWitness,
+    initialReposts,
+    latestReposts,
+    repostWitness,
+    repostState
+  );
+  console.log('Transition created');
+  
+  const proof = await Reposts.proveRepostPublishingTransition(
+    transition,
+    signature,
+    postsMap.getRoot(),
+    postState,
+    targetWitness,
+    repostState.allRepostsCounter.sub(1),
+    initialUsersRepostsCounters,
+    latestUsersRepostsCounters,
+    repostState.userRepostsCounter.sub(1),
+    userRepostsCounterWitness,
+    initialTargetsRepostsCounters,
+    latestTargetsRepostsCounters,
+    repostState.targetRepostsCounter.sub(1),
+    targetRepostsCounterWitness,
+    initialReposts,
+    latestReposts,
+    repostWitness,
+    repostState
+  );
+  console.log('Proof created');
+
+  return {transition: transition, proof: proof};
+}
+
+// ============================================================================
+
+async function updateRepostsOnChainState(transitionsAndProofs: {
+  transition: RepostsTransition,
+  proof: RepostsProof
+}[]) {
+  let sentTxn;
+  const txn = await Mina.transaction(
+    { sender: feepayerAddress, fee: fee },
+    () => {
+      repostsContract.update(transitionsAndProofs[0].proof);
     }
   );
   await txn.prove();

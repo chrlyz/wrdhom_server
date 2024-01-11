@@ -50,14 +50,14 @@ const posts = await regeneratePostsZkAppState(postsContext);
 const usersReactionsCountersMap = new MerkleMap();
 const targetsReactionsCountersMap =  new MerkleMap();
 const reactionsMap = new MerkleMap();
-let numberOfRections = 0;
+let numberOfReactions = 0;
 
 const reactionsContext = {
   prisma: prisma,
   usersReactionsCountersMap: usersReactionsCountersMap,
   targetsReactionsCountersMap: targetsReactionsCountersMap,
   reactionsMap: reactionsMap,
-  numberOfRections: numberOfRections
+  numberOfReactions: numberOfReactions
 }
 
 await regenerateReactionsZkAppState(reactionsContext);
@@ -184,7 +184,7 @@ const syncStateTask = new AsyncTask(
       },
       where: {
         allReactionsCounter: {
-          gt: reactionsContext.numberOfRections
+          gt: reactionsContext.numberOfReactions
         },
         reactionBlockHeight: {
           not: 0
@@ -211,7 +211,7 @@ const syncStateTask = new AsyncTask(
 
       const reactionKey = Field(pReaction.reactionKey);
       reactionsMap.set(reactionKey, reactionState.hash());
-      reactionsContext.numberOfRections += 1;
+      reactionsContext.numberOfReactions += 1;
     }
 
     const pendingComments = await prisma.comments.findMany({
@@ -220,7 +220,7 @@ const syncStateTask = new AsyncTask(
       },
       where: {
         allCommentsCounter: {
-          gt: reactionsContext.numberOfRections
+          gt: reactionsContext.numberOfReactions
         },
         commentBlockHeight: {
           not: 0

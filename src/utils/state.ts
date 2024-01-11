@@ -1,6 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { MerkleMap, Poseidon, PublicKey, CircuitString, Field, Bool } from 'o1js';
-import { PostState, ReactionState, CommentState } from 'wrdhom';
+import { PostState, ReactionState, CommentState, RepostState } from 'wrdhom';
 
 // ============================================================================
 
@@ -79,7 +79,7 @@ export async function regenerateReactionsZkAppState(context: {
   usersReactionsCountersMap: MerkleMap,
   targetsReactionsCountersMap: MerkleMap,
   reactionsMap: MerkleMap,
-  numberOfRections: number
+  numberOfReactions: number
 }
 ) {
   const reactions = await context.prisma.reactions.findMany({
@@ -165,8 +165,8 @@ export async function regenerateReactionsZkAppState(context: {
     console.log('Latest reactionsMap root: ' + context.reactionsMap.getRoot().toString());
   });
   
-  context.numberOfRections = reactions.length;
-  console.log('Original number of reactions: ' + context.numberOfRections);
+  context.numberOfReactions = reactions.length;
+  console.log('Original number of reactions: ' + context.numberOfReactions);
 
   return reactions;
 }
@@ -269,6 +269,103 @@ export async function regenerateCommentsZkAppState(context: {
   console.log('Original number of comments: ' + context.numberOfComments);
 
   return comments;
+}
+
+// ============================================================================
+
+export async function regenerateRepostsZkAppState(context: {
+  prisma: PrismaClient,
+  usersRepostsCountersMap: MerkleMap,
+  targetsRepostsCountersMap: MerkleMap,
+  repostsMap: MerkleMap,
+  numberOfReposts: number
+}
+) {
+  const reposts = await context.prisma.reposts.findMany({
+    orderBy: {
+      allRepostsCounter: 'asc'
+    },
+    where: {
+      repostBlockHeight: {
+        not: 0
+      }
+    }
+  });
+  console.log('reposts:');
+  console.log(reposts)
+  
+  const reposters = new Set(reposts.map( repost => repost.reposterAddress));
+  console.log('reposters:');
+  console.log(reposters);
+  
+  for (const reposter of reposters) {
+    const userReposts = await context.prisma.reposts.findMany({
+      where: {
+        reposterAddress: reposter,
+        repostBlockHeight: {
+        not: 0
+        }
+      }
+    });
+    console.log('Initial usersRepostsCountersMap root: ' + context.usersRepostsCountersMap.getRoot().toString());
+    context.usersRepostsCountersMap.set(
+      Poseidon.hash(PublicKey.fromBase58(reposter).toFields()),
+      Field(userReposts.length)
+    );
+    console.log(userReposts.length);
+    console.log('Latest usersRepostsCountersMap root: ' + context.usersRepostsCountersMap.getRoot().toString());
+  };
+
+  const targets = new Set(reposts.map( repost => repost.targetKey));
+  console.log('targets');
+  console.log(targets);
+
+  for (const target of targets) {
+    const targetReposts = await context.prisma.reposts.findMany({
+      where: {
+        targetKey: target,
+        repostBlockHeight: {
+          not: 0
+        }
+      }
+    })
+    console.log('Initial targetsRepostsCountersMap root: ' + context.targetsRepostsCountersMap.getRoot().toString());
+    context.targetsRepostsCountersMap.set(
+      Field(target),
+      Field(targetReposts.length)
+    );
+    console.log(targetReposts.length);
+    console.log('Latest targetsRepostsCountersMap root: ' + context.targetsRepostsCountersMap.getRoot().toString());
+  }
+  
+  reposts.forEach( repost => {
+    const reposterAddress = PublicKey.fromBase58(repost.reposterAddress);
+    const reposterAddressAsField = Poseidon.hash(reposterAddress.toFields());
+    const targetKey = Field(repost.targetKey);
+
+    const repostState = new RepostState({
+      isTargetPost: Bool(repost.isTargetPost),
+      targetKey: targetKey,
+      reposterAddress: reposterAddress,
+      allRepostsCounter: Field(repost.allRepostsCounter),
+      userRepostsCounter: Field(repost.userRepostsCounter),
+      targetRepostsCounter: Field(repost.targetRepostsCounter),
+      repostBlockHeight: Field(repost.repostBlockHeight),
+      deletionBlockHeight: Field(repost.deletionBlockHeight),
+      restorationBlockHeight: Field(repost.restorationBlockHeight)
+    });
+    console.log('Initial repostsMap root: ' + context.repostsMap.getRoot().toString());
+    context.repostsMap.set(
+      Poseidon.hash([targetKey, reposterAddressAsField]),
+      repostState.hash()
+    );
+    console.log('Latest repostsMap root: ' + context.repostsMap.getRoot().toString());
+  });
+  
+  context.numberOfReposts = reposts.length;
+  console.log('Original number of reposts: ' + context.numberOfReposts);
+
+  return reposts;
 }
 
 // ============================================================================
