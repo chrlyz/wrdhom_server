@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "service": "node ./build/service.js",
-    "prover": "node ./build/prover.js"
+    "prover": "node --max-old-space-size=8888 ./build/prover.js"
   },
   "keywords": [],
   "author": "chrlyz",
