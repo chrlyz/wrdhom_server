@@ -444,7 +444,7 @@ while (true) {
         console.log('Pause to wait for new actions before running loop again...');
         await delay(10000);
       }
-  } else if      (provingTurn === provingComments) {
+  } else if (provingTurn === provingComments) {
 
     const pendingComments = await prisma.comments.findMany({
       take: 1,
