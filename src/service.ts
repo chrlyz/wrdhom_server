@@ -238,7 +238,7 @@ const syncStateTask = new AsyncTask(
       },
       where: {
         allCommentsCounter: {
-          gt: reactionsContext.numberOfReactions
+          gt: commentsContext.numberOfComments
         },
         commentBlockHeight: {
           not: 0
@@ -266,8 +266,8 @@ const syncStateTask = new AsyncTask(
         restorationBlockHeight: Field(pComment.restorationBlockHeight)
       });
 
-      const reactionKey = Field(pComment.commentKey);
-      commentsMap.set(reactionKey, commentState.hash());
+      const commentKey = Field(pComment.commentKey);
+      commentsMap.set(commentKey, commentState.hash());
       commentsContext.numberOfComments += 1;
     }
 
