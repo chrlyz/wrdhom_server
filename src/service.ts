@@ -396,10 +396,9 @@ server.post<{Body: SignedData}>('/reactions', async (request) => {
   const signature = Signature.fromBase58(request.body.signature);
   const reactorAddress = PublicKey.fromBase58(request.body.publicKey);
   const reactionEmojiCodePoint = Number(request.body.data[1]);
-  const emojisCodePoints = ['❤️', '💔', '😂', '🤔', '😮', '😢', '😠', '😎',
-    '🔥', '👀', '👍', '👎', '🙏', '🤝', '🤌', '🙌', '🤭',
-    '😳', '😭', '🤯', '😡', '👽', '😈', '💀', '💯'
-  ].map(emoji => emoji.codePointAt(0));
+  const emojisCodePoints = ['👍', '👎', '😂', '🤔', '😢', '😠', '😎', '🔥',
+  '👀', '🩶', '💔', '🙏','🤝', '🤌', '🙌', '🤭', '😳', '😭', '🤯', '😡',
+  '👽', '😈', '💀', '💯'].map(emoji => emoji.codePointAt(0));
   const emojisSetCodePoints = new Set(emojisCodePoints);
   if (emojisSetCodePoints.has(reactionEmojiCodePoint)) {
 
@@ -857,6 +856,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
 
     const repostsResponse: {
       repostState: string,
+      repostKey: string,
       repostWitness: JSON,
       postState: string,
       postKey: string,
@@ -976,6 +976,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
 
       repostsResponse.push({
         repostState: JSON.stringify(repostState),
+        repostKey: repost.repostKey,
         repostWitness: repostWitness,
         postState: JSON.stringify(postState),
         postKey: post!.postKey,
