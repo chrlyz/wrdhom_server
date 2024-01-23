@@ -595,8 +595,19 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       restorationBlockHeight: bigint;
       postSignature: string;
     }[];
+    let numberOfPosts: number;
+    let numberOfPostsWitness: JSON;
 
     if (posterAddress === undefined) {
+      numberOfPosts = (await prisma.posts.findMany({
+        where: {
+          postBlockHeight: {
+            not: 0
+          }
+        }
+      })).length;
+      numberOfPostsWitness = JSON.parse('{"profile": false}');
+
       posts = await prisma.posts.findMany({
         take: Number(howMany),
         orderBy: {
@@ -611,6 +622,17 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         }
       });
     } else {
+      numberOfPosts = (await prisma.posts.findMany({
+        where: {
+          posterAddress: posterAddress,
+          postBlockHeight: {
+            not: 0
+          }
+        }
+      })).length;
+      const posterAddressAsField = Poseidon.hash(PublicKey.fromBase58(posterAddress).toFields());
+      numberOfPostsWitness = usersPostsCountersMap.getWitness(posterAddressAsField).toJSON();
+
       posts = await prisma.posts.findMany({
         take: Number(howMany),
         orderBy: {
@@ -637,8 +659,12 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         reactionState: string,
         reactionWitness: JSON
       }[],
+      numberOfReactions: number,
+      numberOfReactionsWitness: JSON,
       numberOfComments: number,
-      numberOfReposts: number
+      numberOfCommentsWitness: JSON,
+      numberOfReposts: number,
+      numberOfRepostsWitness: JSON
     }[] = [];
 
     for (const post of posts) {
@@ -669,6 +695,8 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
           }
         }
       });
+      const numberOfReactions = postReactions.length;
+      const numberOfReactionsWitness = targetsReactionsCountersMap.getWitness(postKey).toJSON();
 
       const reactionsResponse: {
         reactionState: string,
@@ -701,7 +729,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         })
       }
 
-      const postComemnts = await prisma.comments.findMany({
+      const postComments = await prisma.comments.findMany({
         where: {
           targetKey: post.postKey,
           commentBlockHeight: {
@@ -709,7 +737,8 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
           }
         }
       });
-      const numberOfComments = postComemnts.length;
+      const numberOfComments = postComments.length;
+      const numberOfCommentsWitness = targetsCommentsCountersMap.getWitness(postKey).toJSON();
 
       const postReposts = await prisma.reposts.findMany({
         where: {
@@ -720,6 +749,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         }
       });
       const numberOfReposts = postReposts.length;
+      const numberOfRepostsWitness = targetsRepostsCountersMap.getWitness(postKey).toJSON();
 
       postsResponse.push({
         postState: JSON.stringify(postState),
@@ -728,12 +758,22 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         content: content,
         postWitness: postWitness,
         reactionsResponse: reactionsResponse,
+        numberOfReactions: numberOfReactions,
+        numberOfReactionsWitness: numberOfReactionsWitness,
         numberOfComments: numberOfComments,
-        numberOfReposts: numberOfReposts
-      })
+        numberOfCommentsWitness: numberOfCommentsWitness,
+        numberOfReposts: numberOfReposts,
+        numberOfRepostsWitness: numberOfRepostsWitness
+      });
     };
 
-    return postsResponse;
+    const response = {
+      numberOfPosts: numberOfPosts,
+      numberOfPostsWitness: numberOfPostsWitness,
+      postsResponse: postsResponse
+    }
+
+    return response;
   } catch(e) {
       console.error(e);
   }
@@ -744,6 +784,16 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
 server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
   try {
     const { targetKey, howMany, fromBlock, toBlock } = request.query;
+
+    const numberOfComments = (await prisma.comments.findMany({
+      where: {
+        targetKey: targetKey,
+        commentBlockHeight: {
+          not: 0
+        }
+      }
+    })).length;
+    const numberOfCommentsWitness = targetsCommentsCountersMap.getWitness(Field(targetKey)).toJSON();
 
     const comments = await prisma.comments.findMany({
       take: Number(howMany),
@@ -797,7 +847,13 @@ server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
       });
     };
 
-    return commentsResponse;
+    const response = {
+      numberOfComments: numberOfComments,
+      numberOfCommentsWitness: numberOfCommentsWitness,
+      commentsResponse: commentsResponse
+    }
+
+    return response;
 
   } catch (e) {
     console.log(e)
@@ -822,8 +878,19 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
       restorationBlockHeight: bigint,
       repostSignature: string
     }[];
+    let numberOfReposts: number;
+    let numberOfRepostsWitness: JSON;
 
     if (reposterAddress === undefined) {
+      numberOfReposts = (await prisma.reposts.findMany({
+        where: {
+          repostBlockHeight: {
+            not: 0
+          }
+        }
+      })).length;
+      numberOfRepostsWitness = JSON.parse('{"profile": false}');
+
       reposts = await prisma.reposts.findMany({
         take: Number(howMany),
         orderBy: {
@@ -838,6 +905,17 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
         }
       });
     } else {
+      numberOfReposts = (await prisma.reposts.findMany({
+        where: {
+          reposterAddress: reposterAddress,
+          repostBlockHeight: {
+            not: 0
+          }
+        }
+      })).length;
+      const reposterAddressAsField = Poseidon.hash(PublicKey.fromBase58(reposterAddress).toFields());
+      numberOfRepostsWitness = usersRepostsCountersMap.getWitness(reposterAddressAsField).toJSON();
+
       reposts = await prisma.reposts.findMany({
         take: Number(howMany),
         orderBy: {
@@ -867,8 +945,12 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
         reactionState: string,
         reactionWitness: JSON
       }[],
+      numberOfReactions: number,
+      numberOfReactionsWitness: JSON,
       numberOfComments: number,
-      numberOfReposts: number
+      numberOfCommentsWitness: JSON,
+      numberOfReposts: number,
+      numberOfRepostsWitness: JSON
     }[] = [];
 
     for (const repost of reposts ) {
@@ -922,6 +1004,8 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
           }
         }
       });
+      const numberOfReactions = postReactions.length;
+      const numberOfReactionsWitness = targetsReactionsCountersMap.getWitness(postKey).toJSON();
 
       const reactionsResponse: {
         reactionState: string,
@@ -954,7 +1038,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
         })
       }
 
-      const postComemnts = await prisma.comments.findMany({
+      const postComments = await prisma.comments.findMany({
         where: {
           targetKey: post!.postKey,
           commentBlockHeight: {
@@ -962,7 +1046,8 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
           }
         }
       });
-      const numberOfComments = postComemnts.length;
+      const numberOfComments = postComments.length;
+      const numberOfCommentsWitness = targetsCommentsCountersMap.getWitness(postKey).toJSON();
 
       const postReposts = await prisma.reposts.findMany({
         where: {
@@ -973,6 +1058,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
         }
       });
       const numberOfReposts = postReposts.length;
+      const numberOfRepostsWitness = targetsRepostsCountersMap.getWitness(postKey).toJSON();
 
       repostsResponse.push({
         repostState: JSON.stringify(repostState),
@@ -984,12 +1070,23 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
         content: content,
         postWitness: postWitness,
         reactionsResponse: reactionsResponse,
+        numberOfReactions: numberOfReactions,
+        numberOfReactionsWitness: numberOfReactionsWitness,
         numberOfComments: numberOfComments,
-        numberOfReposts: numberOfReposts
+        numberOfCommentsWitness: numberOfCommentsWitness,
+        numberOfReposts: numberOfReposts,
+        numberOfRepostsWitness: numberOfRepostsWitness
       })
     }
 
-    return repostsResponse;
+    const response = {
+      numberOfReposts: numberOfReposts,
+      numberOfRepostsWitness: numberOfRepostsWitness,
+      repostsResponse: repostsResponse
+    }
+
+    return response;
+
   } catch(e) {
       console.error(e);
   }
