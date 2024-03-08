@@ -596,7 +596,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       postSignature: string;
     }[];
     let numberOfPosts: number;
-    let numberOfPostsWitness: JSON;
+    let numberOfPostsWitness: string;
 
     if (posterAddress === undefined) {
       numberOfPosts = (await prisma.posts.findMany({
@@ -654,17 +654,17 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       postKey: string,
       postContentID: string,
       content: string,
-      postWitness: JSON,
+      postWitness: string,
       reactionsResponse: {
         reactionState: string,
-        reactionWitness: JSON
+        reactionWitness: string
       }[],
       numberOfReactions: number,
-      numberOfReactionsWitness: JSON,
+      numberOfReactionsWitness: string,
       numberOfComments: number,
-      numberOfCommentsWitness: JSON,
+      numberOfCommentsWitness: string,
       numberOfReposts: number,
-      numberOfRepostsWitness: JSON
+      numberOfRepostsWitness: string
     }[] = [];
 
     for (const post of posts) {
@@ -700,7 +700,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
 
       const reactionsResponse: {
         reactionState: string,
-        reactionWitness: JSON
+        reactionWitness: string
       }[] = [];
 
       for (const reaction of postReactions) {
@@ -725,7 +725,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
 
         reactionsResponse.push({
           reactionState: JSON.stringify(reactionState),
-          reactionWitness: reactionWitness
+          reactionWitness: JSON.stringify(reactionWitness)
         })
       }
 
@@ -756,20 +756,20 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         postKey: post.postKey,
         postContentID: post.postContentID,
         content: content,
-        postWitness: postWitness,
+        postWitness: JSON.stringify(postWitness),
         reactionsResponse: reactionsResponse,
         numberOfReactions: numberOfReactions,
-        numberOfReactionsWitness: numberOfReactionsWitness,
+        numberOfReactionsWitness: JSON.stringify(numberOfReactionsWitness),
         numberOfComments: numberOfComments,
-        numberOfCommentsWitness: numberOfCommentsWitness,
+        numberOfCommentsWitness: JSON.stringify(numberOfCommentsWitness),
         numberOfReposts: numberOfReposts,
-        numberOfRepostsWitness: numberOfRepostsWitness
+        numberOfRepostsWitness: JSON.stringify(numberOfRepostsWitness)
       });
     };
 
     const response = {
       numberOfPosts: numberOfPosts,
-      numberOfPostsWitness: numberOfPostsWitness,
+      numberOfPostsWitness: JSON.stringify(numberOfPostsWitness),
       postsResponse: postsResponse
     }
 
@@ -815,7 +815,7 @@ server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
       commentKey: string,
       commentContentID: string,
       content: string,
-      commentWitness: JSON,
+      commentWitness: string,
     }[] = [];
 
     for (const comment of comments) {
@@ -843,13 +843,13 @@ server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
         commentKey: comment.commentKey,
         commentContentID: comment.commentContentID,
         content: content,
-        commentWitness: commentWitness,
+        commentWitness: JSON.stringify(commentWitness),
       });
     };
 
     const response = {
       numberOfComments: numberOfComments,
-      numberOfCommentsWitness: numberOfCommentsWitness,
+      numberOfCommentsWitness: JSON.stringify(numberOfCommentsWitness),
       commentsResponse: commentsResponse
     }
 
@@ -935,22 +935,22 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
     const repostsResponse: {
       repostState: string,
       repostKey: string,
-      repostWitness: JSON,
+      repostWitness: string,
       postState: string,
       postKey: string,
       postContentID: string,
       content: string,
-      postWitness: JSON,
+      postWitness: string,
       reactionsResponse: {
         reactionState: string,
-        reactionWitness: JSON
+        reactionWitness: string
       }[],
       numberOfReactions: number,
-      numberOfReactionsWitness: JSON,
+      numberOfReactionsWitness: string,
       numberOfComments: number,
-      numberOfCommentsWitness: JSON,
+      numberOfCommentsWitness: string,
       numberOfReposts: number,
-      numberOfRepostsWitness: JSON
+      numberOfRepostsWitness: string
     }[] = [];
 
     for (const repost of reposts ) {
@@ -1009,7 +1009,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
 
       const reactionsResponse: {
         reactionState: string,
-        reactionWitness: JSON
+        reactionWitness: string
       }[] = [];
 
       for (const reaction of postReactions) {
@@ -1034,7 +1034,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
 
         reactionsResponse.push({
           reactionState: JSON.stringify(reactionState),
-          reactionWitness: reactionWitness
+          reactionWitness: JSON.stringify(reactionWitness)
         })
       }
 
@@ -1063,25 +1063,25 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
       repostsResponse.push({
         repostState: JSON.stringify(repostState),
         repostKey: repost.repostKey,
-        repostWitness: repostWitness,
+        repostWitness: JSON.stringify(repostWitness),
         postState: JSON.stringify(postState),
         postKey: post!.postKey,
         postContentID: post!.postContentID,
         content: content,
-        postWitness: postWitness,
+        postWitness: JSON.stringify(postWitness),
         reactionsResponse: reactionsResponse,
         numberOfReactions: numberOfReactions,
-        numberOfReactionsWitness: numberOfReactionsWitness,
+        numberOfReactionsWitness: JSON.stringify(numberOfReactionsWitness),
         numberOfComments: numberOfComments,
-        numberOfCommentsWitness: numberOfCommentsWitness,
+        numberOfCommentsWitness: JSON.stringify(numberOfCommentsWitness),
         numberOfReposts: numberOfReposts,
-        numberOfRepostsWitness: numberOfRepostsWitness
+        numberOfRepostsWitness: JSON.stringify(numberOfRepostsWitness)
       })
     }
 
     const response = {
       numberOfReposts: numberOfReposts,
-      numberOfRepostsWitness: numberOfRepostsWitness,
+      numberOfRepostsWitness: JSON.stringify(numberOfRepostsWitness),
       repostsResponse: repostsResponse
     }
 
