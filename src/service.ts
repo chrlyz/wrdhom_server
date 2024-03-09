@@ -227,8 +227,17 @@ const syncStateTask = new AsyncTask(
         restorationBlockHeight: Field(pReaction.restorationBlockHeight)
       });
 
-      const reactionKey = Field(pReaction.reactionKey);
-      reactionsMap.set(reactionKey, reactionState.hash());
+      reactionsMap.set(Field(pReaction.reactionKey), reactionState.hash());
+
+      const target = await prisma.posts.findUnique({
+        where: {
+          postKey: pReaction.targetKey
+        }
+      });
+      const targetPosterAddress = Poseidon.hash(PublicKey.fromBase58(target!.posterAddress).toFields())
+      usersReactionsCountersMap.set(targetPosterAddress, Field(pReaction.userReactionsCounter));
+      targetsReactionsCountersMap.set(Field(target!.postKey), Field(pReaction.targetReactionsCounter));
+
       reactionsContext.numberOfReactions += 1;
     }
 
@@ -266,8 +275,17 @@ const syncStateTask = new AsyncTask(
         restorationBlockHeight: Field(pComment.restorationBlockHeight)
       });
 
-      const commentKey = Field(pComment.commentKey);
-      commentsMap.set(commentKey, commentState.hash());
+      commentsMap.set(Field(pComment.commentKey), commentState.hash());
+
+      const target = await prisma.posts.findUnique({
+        where: {
+          postKey: pComment.targetKey
+        }
+      });
+      const targetPosterAddress = Poseidon.hash(PublicKey.fromBase58(target!.posterAddress).toFields())
+      usersCommentsCountersMap.set(targetPosterAddress, Field(pComment.userCommentsCounter));
+      targetsCommentsCountersMap.set(Field(target!.postKey), Field(pComment.targetCommentsCounter));
+
       commentsContext.numberOfComments += 1;
     }
 
@@ -300,8 +318,17 @@ const syncStateTask = new AsyncTask(
         restorationBlockHeight: Field(pRepost.restorationBlockHeight)
       });
     
-      const repostKey = Field(pRepost.repostKey);
-      repostsMap.set(repostKey, repostState.hash());
+      repostsMap.set(Field(pRepost.repostKey), repostState.hash());
+
+      const target = await prisma.posts.findUnique({
+        where: {
+          postKey: pRepost.targetKey
+        }
+      });
+      const targetPosterAddress = Poseidon.hash(PublicKey.fromBase58(target!.posterAddress).toFields())
+      usersRepostsCountersMap.set(targetPosterAddress, Field(pRepost.userRepostsCounter));
+      targetsRepostsCountersMap.set(Field(target!.postKey), Field(pRepost.targetRepostsCounter));
+
       repostsContext.numberOfReposts += 1;
     }
   },
