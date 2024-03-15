@@ -7,6 +7,29 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model comments {
+  commentKey             String  @id
+  isTargetPost           Boolean
+  targetKey              String
+  commenterAddress       String
+  commentContentID       String
+  allCommentsCounter     BigInt
+  userCommentsCounter    BigInt
+  targetCommentsCounter  BigInt
+  commentBlockHeight     BigInt
+  deletionBlockHeight    BigInt
+  restorationBlockHeight BigInt
+  commentSignature       String
+}
+
+model deletions {
+  targetKey              String
+  allDeletionsCounter    BigInt @id
+  targetDeletionsCounter BigInt
+  deletionBlockHeight    BigInt
+  deletionSignature      String
+}
+
 model posts {
   postKey                String @id
   posterAddress          String
@@ -34,21 +57,6 @@ model reactions {
   reactionSignature      String
 }
 
-model comments {
-  commentKey             String  @id
-  isTargetPost           Boolean
-  targetKey              String
-  commenterAddress       String
-  commentContentID       String
-  allCommentsCounter     BigInt
-  userCommentsCounter    BigInt
-  targetCommentsCounter  BigInt
-  commentBlockHeight     BigInt
-  deletionBlockHeight    BigInt
-  restorationBlockHeight BigInt
-  commentSignature       String
-}
-
 model reposts {
   repostKey              String  @id
   isTargetPost           Boolean
@@ -61,4 +69,12 @@ model reposts {
   deletionBlockHeight    BigInt
   restorationBlockHeight BigInt
   repostSignature        String
+}
+
+model restorations {
+  targetKey                 String
+  allRestorationsCounter    BigInt @id
+  targetRestorationsCounter BigInt
+  restorationBlockHeight    BigInt
+  restorationSignature      String
 }
