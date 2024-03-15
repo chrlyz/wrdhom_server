@@ -10,7 +10,8 @@ import { regeneratePostsZkAppState, regenerateReactionsZkAppState,
   regenerateCommentsZkAppState, regenerateRepostsZkAppState
 } from './utils/state.js';
 import { CommentState, PostState, ReactionState, fieldToFlagTargetAsReposted,
-  RepostState
+  RepostState,
+  fieldToFlagPostsAsDeleted
 } from 'wrdhom';
 import fs from 'fs/promises';
 import { fastifySchedule } from '@fastify/schedule';
@@ -608,6 +609,63 @@ server.post<{Body: SignedData}>('/reposts', async (request) => {
 
 // ============================================================================
 
+server.post<{Body: SignedPostDeletion}>('/posts/delete', async (request) => {
+
+  const signature = Signature.fromBase58(request.body.signedData.signature);
+  const posterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
+  const postKey = request.body.postKey;
+
+  const post = await prisma.posts.findUnique({
+    where: {
+      postKey: postKey
+    }
+  });
+
+  const deletion = await prisma.deletions.findMany({
+    where: {
+      targetKey: postKey,
+      deletionBlockHeight: {
+        not: 0
+      }
+    }
+  })
+
+  if (post?.deletionBlockHeight !== 0n) {
+    return 'Post is already deleted';
+  } else if (deletion !== undefined) {
+    return 'Post is deletion is already pending';
+  }
+
+  const postContentID = CircuitString.fromString(post!.postContentID);
+
+  const postState = new PostState({
+    posterAddress: posterAddress,
+    postContentID: postContentID,
+    allPostsCounter: Field(post!.allPostsCounter),
+    userPostsCounter: Field(post!.userPostsCounter),
+    postBlockHeight: Field(post!.postBlockHeight),
+    deletionBlockHeight: Field(post!.deletionBlockHeight),
+    restorationBlockHeight: Field(post!.restorationBlockHeight)
+  });
+
+  const postStateHash = postState.hash();
+
+  const isSigned = signature.verify(posterAddress, [
+    postStateHash,
+    fieldToFlagPostsAsDeleted
+  ]);
+
+  // Check that message to delete post is signed
+  if (isSigned) {
+    console.log('Valid Deletion!');
+    return 'Valid Deletion!';
+  } else {
+    return 'Post deletion message is not signed';
+  }
+});
+
+// ============================================================================
+
 server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
   try {
     const { howMany, fromBlock, toBlock, posterAddress } = request.query;
@@ -1166,6 +1224,13 @@ interface CommentsQuery {
   howMany: number,
   fromBlock: number,
   toBlock: number
+}
+
+// ============================================================================
+
+interface SignedPostDeletion {
+  postKey: string,
+  signedData: SignedData
 }
 
 // ============================================================================
