@@ -152,6 +152,7 @@ const provingPosts = 0;
 const provingReactions = 1;
 const provingComments = 2;
 const provingReposts = 3;
+const provingDeletions = 4;
 let provingTurn = 0;
 
 while (true) {
@@ -750,14 +751,151 @@ while (true) {
           }
           tries++;
         }
-      } else {
-        console.log('Pause to wait for new actions before running loop again...');
-        await delay(10000);
+      }
+  } else if (provingTurn === provingDeletions) {
+
+    const pendingDeletions = await prisma.deletions.findMany({
+      take: 1,
+      orderBy: {
+          allDeletionsCounter: 'asc'
+      },
+      where: {
+          deletionBlockHeight: 0
+      }
+      });
+      console.log('pendingDeletions:');
+      console.log(pendingDeletions);
+    
+      startTime = performance.now();
+    
+      const lastBlock = await fetchLastBlock(configReposts.url);
+      const deletionBlockHeight = lastBlock.blockchainLength.toBigint();
+      console.log(deletionBlockHeight);
+    
+      const transitionsAndProofs: {
+        transition: PostsTransition,
+        proof: PostsProof
+      }[] = [];
+    
+      for (const pDeletion of pendingDeletions) {
+
+        const target = await prisma.posts.findUnique({
+          where: {
+            postKey: pDeletion.targetKey
+          }
+        });
+
+        const result = await proveDeletion(
+          target!.posterAddress,
+          target!.postContentID,
+          target!.allPostsCounter,
+          target!.userPostsCounter,
+          target!.postBlockHeight,
+          target!.restorationBlockHeight,
+          Field(target!.postKey),
+          pDeletion.deletionSignature,
+          Field(deletionBlockHeight)
+        );
+    
+        transitionsAndProofs.push(result);
       }
 
+      if (transitionsAndProofs.length !== 0) {
+        await updatePostsOnChainState(transitionsAndProofs);
+    
+        endTime = performance.now();
+        console.log(`${(endTime - startTime)/1000/60} minutes`);
+    
+        let tries = 0;
+        const maxTries = 50;
+        let allPostsCounterFetch;
+        let usersPostsCountersFetch;
+        let postsFetch;
+        while (tries < maxTries) {
+          console.log('Pause to wait for the transaction to confirm...');
+          await delay(20000);
+    
+          allPostsCounterFetch = await postsContract.allPostsCounter.fetch();
+          console.log('allPostsCounterFetch: ' + allPostsCounterFetch?.toString());
+          usersPostsCountersFetch = await postsContract.usersPostsCounters.fetch();
+          console.log('usersPostsCountersFetch: ' + usersPostsCountersFetch?.toString());
+          postsFetch = await postsContract.posts.fetch();
+          console.log('postsFetch: ' + postsFetch?.toString());
+    
+          console.log(Field(postsContext.numberOfPosts).toString());
+          console.log(usersPostsCountersMap.getRoot().toString());
+          console.log(postsMap.getRoot().toString());
+    
+          console.log(allPostsCounterFetch?.equals(Field(postsContext.numberOfPosts)).toBoolean());
+          console.log(usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean());
+          console.log(postsFetch?.equals(postsMap.getRoot()).toBoolean());
+    
+          if (allPostsCounterFetch?.equals(Field(postsContext.numberOfPosts)).toBoolean()
+          && usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean()
+          && postsFetch?.equals(postsMap.getRoot()).toBoolean()) {
+            for (const pDeletion of pendingDeletions) {
+              await prisma.posts.update({
+                  where: {
+                    postKey: pDeletion.targetKey
+                  },
+                  data: {
+                    deletionBlockHeight: deletionBlockHeight
+                  }
+              });
+
+              await prisma.deletions.update({
+                where: {
+                  allDeletionsCounter: pDeletion.allDeletionsCounter
+                },
+                data: {
+                  deletionBlockHeight: deletionBlockHeight
+                }
+              });
+            }
+            tries = maxTries;
+          }
+          // Reset initial state if transaction appears to have failed
+          if (tries === maxTries - 1) {
+
+            for (const pDeletion of pendingDeletions) {
+
+              const target = await prisma.posts.findUnique({
+                where: {
+                  postKey: pDeletion.targetKey
+                }
+              });
+
+              const posterAddress = PublicKey.fromBase58(target!.posterAddress);
+              const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
+              const postContentID = CircuitString.fromString(target!.postContentID);
+
+              const restoredTargetState = new PostState({
+                posterAddress: posterAddress,
+                postContentID: postContentID,
+                allPostsCounter: Field(target!.allPostsCounter),
+                userPostsCounter: Field(target!.userPostsCounter),
+                postBlockHeight: Field(target!.postBlockHeight),
+                deletionBlockHeight: Field(target!.deletionBlockHeight),
+                restorationBlockHeight: Field(target!.restorationBlockHeight)
+              });
+
+              console.log('Initial postsMap root: ' + postsMap.getRoot().toString());
+              postsMap.set(
+                  Poseidon.hash([posterAddressAsField, postContentID.hash()]),
+                  restoredTargetState.hash()
+              );
+              console.log('Latest postsMap root: ' + postsMap.getRoot().toString());
+            }
+          }
+          tries++;
+        }
+      }
+  } else {
+    console.log('Pause to wait for new actions before running loop again...');
+    await delay(10000);
   }
   provingTurn++;
-  if (provingTurn > provingReposts) {
+  if (provingTurn > provingDeletions) {
     provingTurn = 0;
   }
 }
@@ -1271,6 +1409,72 @@ async function updateRepostsOnChainState(transitionsAndProofs: {
   return sentTxn;
 }
 
+// ============================================================================
+
+async function proveDeletion(posterAddressBase58: string,
+  postCID: string, allPostsCounter: bigint, userPostsCounter: bigint,
+  postBlockHeight: bigint, restorationBlockHeight: bigint,
+  postKey: Field, signatureBase58: string, deletionBlockHeight: Field) {
+
+  const signature = Signature.fromBase58(signatureBase58);
+  const posterAddress = PublicKey.fromBase58(posterAddressBase58);
+  const postCIDAsCircuitString = CircuitString.fromString(postCID.toString());
+
+      const initialPostState = new PostState({
+        posterAddress: posterAddress,
+        postContentID: postCIDAsCircuitString,
+        allPostsCounter: Field(allPostsCounter),
+        userPostsCounter: Field(userPostsCounter),
+        postBlockHeight: Field(postBlockHeight),
+        deletionBlockHeight: Field(0),
+        restorationBlockHeight: Field(restorationBlockHeight)
+      });
+
+      const latestPostState = new PostState({
+        posterAddress: posterAddress,
+        postContentID: postCIDAsCircuitString,
+        allPostsCounter: Field(allPostsCounter),
+        userPostsCounter: Field(userPostsCounter),
+        postBlockHeight: Field(postBlockHeight),
+        deletionBlockHeight: deletionBlockHeight,
+        restorationBlockHeight: Field(restorationBlockHeight)
+      });
+
+      const usersPostsCounters = usersPostsCountersMap.getRoot();
+
+      const initialPosts = postsMap.getRoot();
+      const postWitness = postsMap.getWitness(postKey);
+      postsMap.set(postKey, latestPostState.hash());
+      const latestPosts = postsMap.getRoot();
+
+      const transition = PostsTransition.createPostDeletionTransition(
+        signature,
+        initialPostState.allPostsCounter,
+        usersPostsCounters,
+        initialPosts,
+        latestPosts,
+        initialPostState,
+        postWitness,
+        deletionBlockHeight
+      );
+      console.log('Transition created');
+      
+      const proof = await Posts.provePostDeletionTransition(
+        transition,
+        signature,
+        initialPostState.allPostsCounter,
+        usersPostsCounters,
+        initialPosts,
+        latestPosts,
+        initialPostState,
+        postWitness,
+        Field(deletionBlockHeight)
+      );
+      console.log('Proof created');
+
+      return {transition: transition, proof: proof};
+}
+  
 // ============================================================================
 
   async function delay(ms: number) {
