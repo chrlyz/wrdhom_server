@@ -621,20 +621,21 @@ server.post<{Body: SignedPostDeletion}>('/posts/delete', async (request) => {
     }
   });
 
-  const deletion = await prisma.deletions.findMany({
+  const deletions = await prisma.deletions.findMany({
     where: {
-      targetKey: postKey,
-      deletionBlockHeight: {
-        not: 0
-      }
+      targetKey: postKey
     }
   })
 
-  if (post?.deletionBlockHeight !== 0n) {
-    return 'Post is already deleted';
-  } else if (deletion !== undefined) {
-    return 'Post is deletion is already pending';
-  }
+  deletions.forEach(deletion => {
+    if (deletion?.deletionBlockHeight !== 0n) {
+      return 'Post is already deleted';
+    }
+    
+    if (deletion?.deletionBlockHeight === 0n) {
+      return 'Post deletion is already pending';
+    }
+  });
 
   const postContentID = CircuitString.fromString(post!.postContentID);
 
@@ -657,7 +658,28 @@ server.post<{Body: SignedPostDeletion}>('/posts/delete', async (request) => {
 
   // Check that message to delete post is signed
   if (isSigned) {
-    console.log('Valid Deletion!');
+    console.log(request.body.postKey);
+    const allDeletionsCounter = (await prisma.deletions.count()) + 1;
+    console.log('allDeletionsCounter: ' + allDeletionsCounter);
+
+    const deletionsForTarget = await prisma.deletions.findMany({
+      where: {
+        targetKey: request.body.postKey
+      }
+    });
+    const targetDeletionsCounter = deletionsForTarget.length + 1;
+    console.log('targetDeletionsCounter: ' + targetDeletionsCounter);
+
+    await prisma.deletions.create({
+      data: {
+        targetKey: request.body.postKey,
+        allDeletionsCounter: allDeletionsCounter,
+        targetDeletionsCounter: targetDeletionsCounter,
+        deletionBlockHeight: 0,
+        deletionSignature: request.body.signedData.signature
+      }
+    });
+
     return 'Valid Deletion!';
   } else {
     return 'Post deletion message is not signed';
