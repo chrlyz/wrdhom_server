@@ -779,7 +779,11 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       const postContentID = CircuitString.fromString(post.postContentID);
       const postKey = Field(post.postKey);
       const postWitness = postsMap.getWitness(postKey).toJSON();
-      const content = await fs.readFile('./posts/' + post.postContentID, 'utf8');
+
+      let content = '';
+      if (post.deletionBlockHeight === BigInt(0)) {
+        content = await fs.readFile('./posts/' + post.postContentID, 'utf8');
+      }
 
       const postState = new PostState({
         posterAddress: posterAddress,
