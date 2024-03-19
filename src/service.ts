@@ -11,7 +11,8 @@ import { regeneratePostsZkAppState, regenerateReactionsZkAppState,
 } from './utils/state.js';
 import { CommentState, PostState, ReactionState, fieldToFlagTargetAsReposted,
   RepostState,
-  fieldToFlagPostsAsDeleted
+  fieldToFlagPostsAsDeleted,
+  fieldToFlagPostsAsRestored
 } from 'wrdhom';
 import fs from 'fs/promises';
 import { fastifySchedule } from '@fastify/schedule';
@@ -358,12 +359,24 @@ server.post<{Body: SignedPost}>('/posts', async (request) => {
 
   console.log(request.body.signedData);
 
-  // Check that content and signed CID match
-  const signature = Signature.fromBase58(request.body.signedData.signature);
+  // If post already exists but it was previously deleted, ask user if they want to restore it
   const posterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
   const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
   const postContentIDAsField = Field(request.body.signedData.data[0]);
   const postKey = Poseidon.hash([posterAddressAsField, postContentIDAsField]);
+
+  const post = await prisma.posts.findUnique({
+    where: {
+      postKey: postKey.toString()
+    }
+  });
+
+  if (post !== null && Number(post?.deletionBlockHeight) !== 0) {
+    return 'Restore?'
+  }
+
+  // Check that content and signed CID match
+  const signature = Signature.fromBase58(request.body.signedData.signature);
   const postContentIDAsBigInt = postContentIDAsField.toBigInt();
   const file = new Blob([request.body.post]);
   console.log(request.body.post);
@@ -688,9 +701,112 @@ server.post<{Body: SignedPostDeletion}>('/posts/delete', async (request) => {
 
 // ============================================================================
 
+server.post<{Body: SignedPostRestoration}>('/posts/restore', async (request) => {
+
+  const signature = Signature.fromBase58(request.body.signedData.signature);
+  const posterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
+  const postKey = request.body.postKey;
+
+  const post = await prisma.posts.findUnique({
+    where: {
+      postKey: postKey
+    }
+  });
+
+  if(Number(post!.deletionBlockHeight) === 0) {
+    return 'Post has not been deleted, so it cannot be restored';
+  }
+
+  const restorations = await prisma.restorations.findMany({
+    where: {
+      targetKey: postKey
+    }
+  })
+
+  restorations.forEach(restoration => {
+    if (restoration?.restorationBlockHeight === 0n) {
+      return 'Post restoration is already pending';
+    }
+  });
+
+  const postContentID = CircuitString.fromString(post!.postContentID);
+
+  const postState = new PostState({
+    posterAddress: posterAddress,
+    postContentID: postContentID,
+    allPostsCounter: Field(post!.allPostsCounter),
+    userPostsCounter: Field(post!.userPostsCounter),
+    postBlockHeight: Field(post!.postBlockHeight),
+    deletionBlockHeight: Field(post!.deletionBlockHeight),
+    restorationBlockHeight: Field(post!.restorationBlockHeight)
+  });
+
+  const postStateHash = postState.hash();
+
+  const isSigned = signature.verify(posterAddress, [
+    postStateHash,
+    fieldToFlagPostsAsRestored
+  ]);
+
+  // Check that message to delete post is signed
+  if (isSigned) {
+    console.log(request.body.postKey);
+    const allRestorationsCounter = (await prisma.restorations.count()) + 1;
+    console.log('allRestorationsCounter: ' + allRestorationsCounter);
+
+    const restorationsForTarget = await prisma.restorations.findMany({
+      where: {
+        targetKey: request.body.postKey
+      }
+    });
+    const targetRestorationsCounter = restorationsForTarget.length + 1;
+    console.log('targetRestorationsCounter: ' + targetRestorationsCounter);
+
+    await prisma.restorations.create({
+      data: {
+        targetKey: request.body.postKey,
+        allRestorationsCounter: allRestorationsCounter,
+        targetRestorationsCounter: targetRestorationsCounter,
+        restorationBlockHeight: 0,
+        restorationSignature: request.body.signedData.signature
+      }
+    });
+
+    return 'Valid Restoration!';
+  } else {
+    return 'Post restoration message is not signed';
+  }
+});
+
+// ============================================================================
+
 server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
   try {
-    const { howMany, fromBlock, toBlock, posterAddress } = request.query;
+    const { howMany, fromBlock, toBlock, posterAddress, postKey } = request.query;
+
+    if (postKey !== undefined) {
+      const post = await prisma.posts.findUnique({
+        where: {
+          postKey: postKey
+        }
+      });
+
+      const posterAddress = PublicKey.fromBase58(post!.posterAddress);
+      const postContentID = CircuitString.fromString(post!.postContentID);
+
+      const postState = new PostState({
+        posterAddress: posterAddress,
+        postContentID: postContentID,
+        allPostsCounter: Field(post!.allPostsCounter),
+        userPostsCounter: Field(post!.userPostsCounter),
+        postBlockHeight: Field(post!.postBlockHeight),
+        deletionBlockHeight: Field(post!.deletionBlockHeight),
+        restorationBlockHeight: Field(post!.restorationBlockHeight)
+      });
+
+      return { postState: JSON.stringify(postState)};
+    }
+
     let posts: {
       postKey: string;
       posterAddress: string;
@@ -1231,7 +1347,8 @@ interface PostsQuery {
   howMany: number,
   fromBlock: number,
   toBlock: number,
-  posterAddress: string
+  posterAddress: string,
+  postKey: string
 }
 
 // ============================================================================
@@ -1255,6 +1372,13 @@ interface CommentsQuery {
 // ============================================================================
 
 interface SignedPostDeletion {
+  postKey: string,
+  signedData: SignedData
+}
+
+// ============================================================================
+
+interface SignedPostRestoration {
   postKey: string,
   signedData: SignedData
 }
