@@ -153,6 +153,7 @@ const provingReactions = 1;
 const provingComments = 2;
 const provingReposts = 3;
 const provingDeletions = 4;
+const provingRestorations = 5;
 let provingTurn = 0;
 
 while (true) {
@@ -890,12 +891,150 @@ while (true) {
           tries++;
         }
       }
+  } else if (provingTurn === provingRestorations) {
+
+    const pendingRestorations = await prisma.restorations.findMany({
+      take: 1,
+      orderBy: {
+          allRestorationsCounter: 'asc'
+      },
+      where: {
+          restorationBlockHeight: 0
+      }
+      });
+      console.log('pendingRestorations:');
+      console.log(pendingRestorations);
+    
+      startTime = performance.now();
+    
+      const lastBlock = await fetchLastBlock(configReposts.url);
+      const restorationBlockHeight = lastBlock.blockchainLength.toBigint();
+      console.log(restorationBlockHeight);
+    
+      const transitionsAndProofs: {
+        transition: PostsTransition,
+        proof: PostsProof
+      }[] = [];
+    
+      for (const pRestoration of pendingRestorations) {
+
+        const target = await prisma.posts.findUnique({
+          where: {
+            postKey: pRestoration.targetKey
+          }
+        });
+
+        const result = await proveRestoration(
+          target!.posterAddress,
+          target!.postContentID,
+          target!.allPostsCounter,
+          target!.userPostsCounter,
+          target!.postBlockHeight,
+          target!.deletionBlockHeight,
+          Field(target!.postKey),
+          pRestoration.restorationSignature,
+          Field(restorationBlockHeight)
+        );
+    
+        transitionsAndProofs.push(result);
+      }
+
+      if (transitionsAndProofs.length !== 0) {
+        await updatePostsOnChainState(transitionsAndProofs);
+    
+        endTime = performance.now();
+        console.log(`${(endTime - startTime)/1000/60} minutes`);
+    
+        let tries = 0;
+        const maxTries = 50;
+        let allPostsCounterFetch;
+        let usersPostsCountersFetch;
+        let postsFetch;
+        while (tries < maxTries) {
+          console.log('Pause to wait for the transaction to confirm...');
+          await delay(20000);
+    
+          allPostsCounterFetch = await postsContract.allPostsCounter.fetch();
+          console.log('allPostsCounterFetch: ' + allPostsCounterFetch?.toString());
+          usersPostsCountersFetch = await postsContract.usersPostsCounters.fetch();
+          console.log('usersPostsCountersFetch: ' + usersPostsCountersFetch?.toString());
+          postsFetch = await postsContract.posts.fetch();
+          console.log('postsFetch: ' + postsFetch?.toString());
+    
+          console.log(Field(postsContext.numberOfPosts).toString());
+          console.log(usersPostsCountersMap.getRoot().toString());
+          console.log(postsMap.getRoot().toString());
+    
+          console.log(allPostsCounterFetch?.equals(Field(postsContext.numberOfPosts)).toBoolean());
+          console.log(usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean());
+          console.log(postsFetch?.equals(postsMap.getRoot()).toBoolean());
+    
+          if (allPostsCounterFetch?.equals(Field(postsContext.numberOfPosts)).toBoolean()
+          && usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean()
+          && postsFetch?.equals(postsMap.getRoot()).toBoolean()) {
+            for (const pRestoration of pendingRestorations) {
+              await prisma.posts.update({
+                  where: {
+                    postKey: pRestoration.targetKey
+                  },
+                  data: {
+                    restorationBlockHeight: restorationBlockHeight
+                  }
+              });
+
+              await prisma.restorations.update({
+                where: {
+                  allRestorationsCounter: pRestoration.allRestorationsCounter
+                },
+                data: {
+                  restorationBlockHeight: restorationBlockHeight
+                }
+              });
+            }
+            tries = maxTries;
+          }
+          // Reset initial state if transaction appears to have failed
+          if (tries === maxTries - 1) {
+
+            for (const pRestoration of pendingRestorations) {
+
+              const target = await prisma.posts.findUnique({
+                where: {
+                  postKey: pRestoration.targetKey
+                }
+              });
+
+              const posterAddress = PublicKey.fromBase58(target!.posterAddress);
+              const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
+              const postContentID = CircuitString.fromString(target!.postContentID);
+
+              const restoredTargetState = new PostState({
+                posterAddress: posterAddress,
+                postContentID: postContentID,
+                allPostsCounter: Field(target!.allPostsCounter),
+                userPostsCounter: Field(target!.userPostsCounter),
+                postBlockHeight: Field(target!.postBlockHeight),
+                deletionBlockHeight: Field(target!.deletionBlockHeight),
+                restorationBlockHeight: Field(target!.restorationBlockHeight)
+              });
+
+              console.log('Initial postsMap root: ' + postsMap.getRoot().toString());
+              postsMap.set(
+                  Poseidon.hash([posterAddressAsField, postContentID.hash()]),
+                  restoredTargetState.hash()
+              );
+              console.log('Latest postsMap root: ' + postsMap.getRoot().toString());
+            }
+          }
+          tries++;
+        }
+      }
   } else {
     console.log('Pause to wait for new actions before running loop again...');
     await delay(10000);
   }
   provingTurn++;
-  if (provingTurn > provingDeletions) {
+  if (provingTurn > provingRestorations) {
     provingTurn = 0;
   }
 }
@@ -1469,6 +1608,72 @@ async function proveDeletion(posterAddressBase58: string,
         initialPostState,
         postWitness,
         Field(deletionBlockHeight)
+      );
+      console.log('Proof created');
+
+      return {transition: transition, proof: proof};
+}
+
+// ============================================================================
+
+async function proveRestoration(posterAddressBase58: string,
+  postCID: string, allPostsCounter: bigint, userPostsCounter: bigint,
+  postBlockHeight: bigint, deletionBlockHeight: bigint,
+  postKey: Field, signatureBase58: string, restorationBlockHeight: Field) {
+
+  const signature = Signature.fromBase58(signatureBase58);
+  const posterAddress = PublicKey.fromBase58(posterAddressBase58);
+  const postCIDAsCircuitString = CircuitString.fromString(postCID.toString());
+
+      const initialPostState = new PostState({
+        posterAddress: posterAddress,
+        postContentID: postCIDAsCircuitString,
+        allPostsCounter: Field(allPostsCounter),
+        userPostsCounter: Field(userPostsCounter),
+        postBlockHeight: Field(postBlockHeight),
+        deletionBlockHeight: Field(deletionBlockHeight),
+        restorationBlockHeight: Field(0)
+      });
+
+      const latestPostState = new PostState({
+        posterAddress: posterAddress,
+        postContentID: postCIDAsCircuitString,
+        allPostsCounter: Field(allPostsCounter),
+        userPostsCounter: Field(userPostsCounter),
+        postBlockHeight: Field(postBlockHeight),
+        deletionBlockHeight: Field(deletionBlockHeight),
+        restorationBlockHeight: restorationBlockHeight
+      });
+
+      const usersPostsCounters = usersPostsCountersMap.getRoot();
+
+      const initialPosts = postsMap.getRoot();
+      const postWitness = postsMap.getWitness(postKey);
+      postsMap.set(postKey, latestPostState.hash());
+      const latestPosts = postsMap.getRoot();
+
+      const transition = PostsTransition.createPostRestorationTransition(
+        signature,
+        initialPostState.allPostsCounter,
+        usersPostsCounters,
+        initialPosts,
+        latestPosts,
+        initialPostState,
+        postWitness,
+        restorationBlockHeight
+      );
+      console.log('Transition created');
+      
+      const proof = await Posts.provePostRestorationTransition(
+        transition,
+        signature,
+        initialPostState.allPostsCounter,
+        usersPostsCounters,
+        initialPosts,
+        latestPosts,
+        initialPostState,
+        postWitness,
+        restorationBlockHeight
       );
       console.log('Proof created');
 
