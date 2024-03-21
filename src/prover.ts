@@ -442,9 +442,6 @@ while (true) {
           }
           tries++;
         }
-      } else {
-        console.log('Pause to wait for new actions before running loop again...');
-        await delay(10000);
       }
   } else if (provingTurn === provingComments) {
 
@@ -597,9 +594,6 @@ while (true) {
           }
           tries++;
         }
-      } else {
-        console.log('Pause to wait for new actions before running loop again...');
-        await delay(10000);
       }
 
   } else if (provingTurn === provingReposts) {
@@ -910,6 +904,8 @@ while (true) {
       const lastBlock = await fetchLastBlock(configReposts.url);
       const restorationBlockHeight = lastBlock.blockchainLength.toBigint();
       console.log(restorationBlockHeight);
+
+      const currentAllPostsCounter = await prisma.posts.count();
     
       const transitionsAndProofs: {
         transition: PostsTransition,
@@ -933,7 +929,8 @@ while (true) {
           target!.deletionBlockHeight,
           Field(target!.postKey),
           pRestoration.restorationSignature,
-          Field(restorationBlockHeight)
+          Field(restorationBlockHeight),
+          Field(currentAllPostsCounter)
         );
     
         transitionsAndProofs.push(result);
@@ -1029,13 +1026,12 @@ while (true) {
           tries++;
         }
       }
-  } else {
-    console.log('Pause to wait for new actions before running loop again...');
-    await delay(10000);
   }
   provingTurn++;
   if (provingTurn > provingRestorations) {
     provingTurn = 0;
+    console.log('Pause to wait for new actions before running loop again...');
+    await delay(10000);
   }
 }
 
@@ -1619,7 +1615,8 @@ async function proveDeletion(posterAddressBase58: string,
 async function proveRestoration(posterAddressBase58: string,
   postCID: string, allPostsCounter: bigint, userPostsCounter: bigint,
   postBlockHeight: bigint, deletionBlockHeight: bigint,
-  postKey: Field, signatureBase58: string, restorationBlockHeight: Field) {
+  postKey: Field, signatureBase58: string, restorationBlockHeight: Field,
+  currentAllPostsCounter: Field) {
 
   const signature = Signature.fromBase58(signatureBase58);
   const posterAddress = PublicKey.fromBase58(posterAddressBase58);
@@ -1641,7 +1638,7 @@ async function proveRestoration(posterAddressBase58: string,
         allPostsCounter: Field(allPostsCounter),
         userPostsCounter: Field(userPostsCounter),
         postBlockHeight: Field(postBlockHeight),
-        deletionBlockHeight: Field(deletionBlockHeight),
+        deletionBlockHeight: Field(0),
         restorationBlockHeight: restorationBlockHeight
       });
 
@@ -1654,7 +1651,7 @@ async function proveRestoration(posterAddressBase58: string,
 
       const transition = PostsTransition.createPostRestorationTransition(
         signature,
-        initialPostState.allPostsCounter,
+        currentAllPostsCounter,
         usersPostsCounters,
         initialPosts,
         latestPosts,
@@ -1667,7 +1664,7 @@ async function proveRestoration(posterAddressBase58: string,
       const proof = await Posts.provePostRestorationTransition(
         transition,
         signature,
-        initialPostState.allPostsCounter,
+        currentAllPostsCounter,
         usersPostsCounters,
         initialPosts,
         latestPosts,
