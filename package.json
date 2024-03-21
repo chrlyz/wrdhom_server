@@ -22,9 +22,9 @@
     "dotenv": "^16.3.1",
     "fastify": "^4.24.3",
     "ipfs-car": "^1.0.0",
-    "mina-signer": "^3.0.0",
+    "mina-signer": "^3.0.5",
     "toad-scheduler": "^3.0.0",
-    "wrdhom": "^0.3.3"
+    "wrdhom": "^0.4.0"
   },
   "devDependencies": {
     "@types/node": "^20.9.0",
