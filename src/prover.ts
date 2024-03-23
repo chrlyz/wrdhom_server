@@ -766,6 +766,8 @@ while (true) {
       const lastBlock = await fetchLastBlock(configReposts.url);
       const deletionBlockHeight = lastBlock.blockchainLength.toBigint();
       console.log(deletionBlockHeight);
+
+      const currentAllPostsCounter = await prisma.posts.count();
     
       const transitionsAndProofs: {
         transition: PostsTransition,
@@ -789,7 +791,8 @@ while (true) {
           target!.restorationBlockHeight,
           Field(target!.postKey),
           pDeletion.deletionSignature,
-          Field(deletionBlockHeight)
+          Field(deletionBlockHeight),
+          Field(currentAllPostsCounter)
         );
     
         transitionsAndProofs.push(result);
@@ -927,6 +930,7 @@ while (true) {
           target!.userPostsCounter,
           target!.postBlockHeight,
           target!.deletionBlockHeight,
+          target!.restorationBlockHeight,
           Field(target!.postKey),
           pRestoration.restorationSignature,
           Field(restorationBlockHeight),
@@ -975,6 +979,7 @@ while (true) {
                     postKey: pRestoration.targetKey
                   },
                   data: {
+                    deletionBlockHeight: 0,
                     restorationBlockHeight: restorationBlockHeight
                   }
               });
@@ -1149,8 +1154,8 @@ async function provePost(signatureBase58: string, posterAddressBase58: string,
     await txn.prove();
     sentTxn = await txn.sign([feepayerKey]).send();
   
-    if (sentTxn?.hash() !== undefined) {
-      console.log(`https://minascan.io/berkeley/tx/${sentTxn.hash()}`);
+    if (sentTxn !== undefined) {
+      console.log(`https://minascan.io/berkeley/tx/${sentTxn.hash}`);
     }
 
     return sentTxn;
@@ -1279,8 +1284,8 @@ async function updateReactionsOnChainState(transitionsAndProofs: {
   await txn.prove();
   sentTxn = await txn.sign([feepayerKey]).send();
 
-  if (sentTxn?.hash() !== undefined) {
-    console.log(`https://minascan.io/berkeley/tx/${sentTxn.hash()}`);
+  if (sentTxn !== undefined) {
+    console.log(`https://minascan.io/berkeley/tx/${sentTxn.hash}`);
   }
 
   return sentTxn;
@@ -1410,8 +1415,8 @@ async function updateCommentsOnChainState(transitionsAndProofs: {
   await txn.prove();
   sentTxn = await txn.sign([feepayerKey]).send();
 
-  if (sentTxn?.hash() !== undefined) {
-    console.log(`https://minascan.io/berkeley/tx/${sentTxn.hash()}`);
+  if (sentTxn !== undefined) {
+    console.log(`https://minascan.io/berkeley/tx/${sentTxn.hash}`);
   }
 
   return sentTxn;
@@ -1537,8 +1542,8 @@ async function updateRepostsOnChainState(transitionsAndProofs: {
   await txn.prove();
   sentTxn = await txn.sign([feepayerKey]).send();
 
-  if (sentTxn?.hash() !== undefined) {
-    console.log(`https://minascan.io/berkeley/tx/${sentTxn.hash()}`);
+  if (sentTxn !== undefined) {
+    console.log(`https://minascan.io/berkeley/tx/${sentTxn.hash}`);
   }
 
   return sentTxn;
@@ -1549,7 +1554,8 @@ async function updateRepostsOnChainState(transitionsAndProofs: {
 async function proveDeletion(posterAddressBase58: string,
   postCID: string, allPostsCounter: bigint, userPostsCounter: bigint,
   postBlockHeight: bigint, restorationBlockHeight: bigint,
-  postKey: Field, signatureBase58: string, deletionBlockHeight: Field) {
+  postKey: Field, signatureBase58: string, deletionBlockHeight: Field,
+  currentAllPostsCounter: Field) {
 
   const signature = Signature.fromBase58(signatureBase58);
   const posterAddress = PublicKey.fromBase58(posterAddressBase58);
@@ -1584,7 +1590,7 @@ async function proveDeletion(posterAddressBase58: string,
 
       const transition = PostsTransition.createPostDeletionTransition(
         signature,
-        initialPostState.allPostsCounter,
+        currentAllPostsCounter,
         usersPostsCounters,
         initialPosts,
         latestPosts,
@@ -1597,13 +1603,13 @@ async function proveDeletion(posterAddressBase58: string,
       const proof = await Posts.provePostDeletionTransition(
         transition,
         signature,
-        initialPostState.allPostsCounter,
+        currentAllPostsCounter,
         usersPostsCounters,
         initialPosts,
         latestPosts,
         initialPostState,
         postWitness,
-        Field(deletionBlockHeight)
+        deletionBlockHeight
       );
       console.log('Proof created');
 
@@ -1614,7 +1620,7 @@ async function proveDeletion(posterAddressBase58: string,
 
 async function proveRestoration(posterAddressBase58: string,
   postCID: string, allPostsCounter: bigint, userPostsCounter: bigint,
-  postBlockHeight: bigint, deletionBlockHeight: bigint,
+  postBlockHeight: bigint, deletionBlockHeight: bigint, initialRestorationBlockHeight: bigint,
   postKey: Field, signatureBase58: string, restorationBlockHeight: Field,
   currentAllPostsCounter: Field) {
 
@@ -1629,7 +1635,7 @@ async function proveRestoration(posterAddressBase58: string,
         userPostsCounter: Field(userPostsCounter),
         postBlockHeight: Field(postBlockHeight),
         deletionBlockHeight: Field(deletionBlockHeight),
-        restorationBlockHeight: Field(0)
+        restorationBlockHeight: Field(initialRestorationBlockHeight)
       });
 
       const latestPostState = new PostState({

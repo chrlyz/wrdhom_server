@@ -97,6 +97,28 @@ const repostsContext = {
 
 await regenerateRepostsZkAppState(repostsContext);
 
+const deletions = await prisma.deletions.findMany({
+  where: {
+    deletionBlockHeight: {
+      gt: 0
+    }
+  }
+});
+
+let numberOfDeletions = deletions.length;
+console.log('numberOfDeletions: ' + numberOfDeletions)
+
+const restorations = await prisma.restorations.findMany({
+  where: {
+    restorationBlockHeight: {
+      gt: 0
+    }
+  }
+});
+
+let numberOfRestorations = restorations.length;
+console.log('numberOfRestorations: ' + numberOfRestorations)
+
 // Get content and keep it locally for faster reponses
 
 try {
@@ -332,6 +354,74 @@ const syncStateTask = new AsyncTask(
       targetsRepostsCountersMap.set(Field(target!.postKey), Field(pRepost.targetRepostsCounter));
 
       repostsContext.numberOfReposts += 1;
+    }
+
+    const pendingDeletions = await prisma.deletions.findMany({
+      where: {
+        allDeletionsCounter: {
+          gt: numberOfDeletions,
+        },
+        deletionBlockHeight: {
+          gt: 0
+        }
+      }
+    });
+
+    for (const pDeletion of pendingDeletions) {
+      const target = await prisma.posts.findUnique({
+        where: {
+          postKey: pDeletion.targetKey
+        }
+      });
+
+      console.log(pDeletion);
+      const postState = new PostState({
+        posterAddress: PublicKey.fromBase58(target!.posterAddress),
+        postContentID: CircuitString.fromString(target!.postContentID),
+        allPostsCounter: Field(target!.allPostsCounter),
+        userPostsCounter: Field(target!.userPostsCounter),
+        postBlockHeight: Field(target!.postBlockHeight),
+        deletionBlockHeight: Field(target!.deletionBlockHeight),
+        restorationBlockHeight: Field(target!.restorationBlockHeight)
+      });
+
+      const postKey = Field(target!.postKey);
+      postsMap.set(postKey, postState.hash());
+      numberOfDeletions += 1;
+    }
+
+    const pendingRestorations = await prisma.restorations.findMany({
+      where: {
+        allRestorationsCounter: {
+          gt: numberOfRestorations
+        },
+        restorationBlockHeight: {
+          gt: 0
+        }
+      }
+    });
+
+    for (const pRestoration of pendingRestorations) {
+      const target = await prisma.posts.findUnique({
+        where: {
+          postKey: pRestoration.targetKey
+        }
+      });
+
+      console.log(pRestoration);
+      const postState = new PostState({
+        posterAddress: PublicKey.fromBase58(target!.posterAddress),
+        postContentID: CircuitString.fromString(target!.postContentID),
+        allPostsCounter: Field(target!.allPostsCounter),
+        userPostsCounter: Field(target!.userPostsCounter),
+        postBlockHeight: Field(target!.postBlockHeight),
+        deletionBlockHeight: Field(target!.deletionBlockHeight),
+        restorationBlockHeight: Field(target!.restorationBlockHeight)
+      });
+
+      const postKey = Field(target!.postKey);
+      postsMap.set(postKey, postState.hash());
+      numberOfRestorations += 1;
     }
   },
   (e) => {console.error(e)}
