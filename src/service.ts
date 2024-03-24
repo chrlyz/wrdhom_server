@@ -12,7 +12,8 @@ import { regeneratePostsZkAppState, regenerateReactionsZkAppState,
 import { CommentState, PostState, ReactionState, fieldToFlagTargetAsReposted,
   RepostState,
   fieldToFlagPostsAsDeleted,
-  fieldToFlagPostsAsRestored
+  fieldToFlagPostsAsRestored,
+  fieldToFlagCommentsAsDeleted
 } from 'wrdhom';
 import fs from 'fs/promises';
 import { fastifySchedule } from '@fastify/schedule';
@@ -761,13 +762,13 @@ server.post<{Body: SignedPostDeletion}>('/posts/delete', async (request) => {
 
   // Check that message to delete post is signed
   if (isSigned) {
-    console.log(request.body.postKey);
+    console.log(postKey);
     const allDeletionsCounter = (await prisma.deletions.count()) + 1;
     console.log('allDeletionsCounter: ' + allDeletionsCounter);
 
     const deletionsForTarget = await prisma.deletions.findMany({
       where: {
-        targetKey: request.body.postKey
+        targetKey: postKey
       }
     });
     const targetDeletionsCounter = deletionsForTarget.length + 1;
@@ -775,7 +776,7 @@ server.post<{Body: SignedPostDeletion}>('/posts/delete', async (request) => {
 
     await prisma.deletions.create({
       data: {
-        targetKey: request.body.postKey,
+        targetKey: postKey,
         allDeletionsCounter: allDeletionsCounter,
         targetDeletionsCounter: targetDeletionsCounter,
         deletionBlockHeight: 0,
@@ -783,7 +784,90 @@ server.post<{Body: SignedPostDeletion}>('/posts/delete', async (request) => {
       }
     });
 
-    return 'Valid Deletion!';
+    return 'Valid Post Deletion!';
+  } else {
+    return 'Post deletion message is not signed';
+  }
+});
+
+// ============================================================================
+
+server.post<{Body: SignedCommentDeletion}>('/comments/delete', async (request) => {
+
+  const signature = Signature.fromBase58(request.body.signedData.signature);
+  const commenterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
+  const targetKey = request.body.targetKey;
+  const commentKey = request.body.commentKey;
+
+  const comment = await prisma.comments.findUnique({
+    where: {
+      commentKey: commentKey
+    }
+  });
+
+  const deletions = await prisma.deletions.findMany({
+    where: {
+      targetKey: commentKey
+    }
+  })
+
+  deletions.forEach(deletion => {
+    if (deletion?.deletionBlockHeight !== 0n) {
+      return 'Comment is already deleted';
+    }
+    
+    if (deletion?.deletionBlockHeight === 0n) {
+      return 'Comment deletion is already pending';
+    }
+  });
+
+  const commentContentID = CircuitString.fromString(comment!.commentContentID);
+
+  const commentState = new CommentState({
+    isTargetPost: Bool(comment!.isTargetPost),
+    targetKey: Field(targetKey),
+    commenterAddress: commenterAddress,
+    commentContentID: commentContentID,
+    allCommentsCounter: Field(comment!.allCommentsCounter),
+    userCommentsCounter: Field(comment!.userCommentsCounter),
+    targetCommentsCounter: Field(comment!.targetCommentsCounter),
+    commentBlockHeight: Field(comment!.commentBlockHeight),
+    deletionBlockHeight: Field(comment!.deletionBlockHeight),
+    restorationBlockHeight: Field(comment!.restorationBlockHeight)
+  });
+
+  const commentStateHash = commentState.hash();
+
+  const isSigned = signature.verify(commenterAddress, [
+    commentStateHash,
+    fieldToFlagCommentsAsDeleted
+  ]);
+
+  // Check that message to delete post is signed
+  if (isSigned) {
+    console.log(commentKey);
+    const allDeletionsCounter = (await prisma.deletions.count()) + 1;
+    console.log('allDeletionsCounter: ' + allDeletionsCounter);
+
+    const deletionsForTarget = await prisma.deletions.findMany({
+      where: {
+        targetKey: commentKey
+      }
+    });
+    const targetDeletionsCounter = deletionsForTarget.length + 1;
+    console.log('targetDeletionsCounter: ' + targetDeletionsCounter);
+
+    await prisma.deletions.create({
+      data: {
+        targetKey: commentKey,
+        allDeletionsCounter: allDeletionsCounter,
+        targetDeletionsCounter: targetDeletionsCounter,
+        deletionBlockHeight: 0,
+        deletionSignature: request.body.signedData.signature
+      }
+    });
+
+    return 'Valid Comment Deletion!';
   } else {
     return 'Post deletion message is not signed';
   }
@@ -1468,6 +1552,14 @@ interface SignedPostDeletion {
 
 // ============================================================================
 
+interface SignedCommentDeletion {
+  targetKey: string,
+  commentKey: string,
+  signedData: SignedData
+}
+
+// ============================================================================
+
 interface SignedPostRestoration {
   postKey: string,
   signedData: SignedData
@@ -1547,7 +1639,7 @@ const createSQLComment = async (commentKey: Field, targetKey: Field, commenterAd
   await prisma.comments.create({
     data: {
       commentKey: commentKey.toString(),
-      isTargetPost: true,
+      isTargetPost: false,
       targetKey: targetKey.toString(),
       commenterAddress: commenterAddress,
       commentContentID: commentCID.toString(),
