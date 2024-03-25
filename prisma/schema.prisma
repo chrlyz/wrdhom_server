@@ -7,6 +7,22 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model commentDeletions {
+  targetKey              String
+  allDeletionsCounter    BigInt @id
+  targetDeletionsCounter BigInt
+  deletionBlockHeight    BigInt
+  deletionSignature      String
+}
+
+model commentRestorations {
+  targetKey                 String
+  allRestorationsCounter    BigInt @id
+  targetRestorationsCounter BigInt
+  restorationBlockHeight    BigInt
+  restorationSignature      String
+}
+
 model comments {
   commentKey             String  @id
   isTargetPost           Boolean
@@ -22,12 +38,20 @@ model comments {
   commentSignature       String
 }
 
-model deletions {
+model postDeletions {
   targetKey              String
   allDeletionsCounter    BigInt @id
   targetDeletionsCounter BigInt
   deletionBlockHeight    BigInt
   deletionSignature      String
+}
+
+model postRestorations {
+  targetKey                 String
+  allRestorationsCounter    BigInt @id
+  targetRestorationsCounter BigInt
+  restorationBlockHeight    BigInt
+  restorationSignature      String
 }
 
 model posts {
@@ -40,6 +64,22 @@ model posts {
   deletionBlockHeight    BigInt
   restorationBlockHeight BigInt
   postSignature          String
+}
+
+model reactionDeletions {
+  targetKey              String
+  allDeletionsCounter    BigInt @id
+  targetDeletionsCounter BigInt
+  deletionBlockHeight    BigInt
+  deletionSignature      String
+}
+
+model reactionRestorations {
+  targetKey                 String
+  allRestorationsCounter    BigInt @id
+  targetRestorationsCounter BigInt
+  restorationBlockHeight    BigInt
+  restorationSignature      String
 }
 
 model reactions {
@@ -57,6 +97,22 @@ model reactions {
   reactionSignature      String
 }
 
+model repostDeletions {
+  targetKey              String
+  allDeletionsCounter    BigInt @id
+  targetDeletionsCounter BigInt
+  deletionBlockHeight    BigInt
+  deletionSignature      String
+}
+
+model repostRestorations {
+  targetKey                 String
+  allRestorationsCounter    BigInt @id
+  targetRestorationsCounter BigInt
+  restorationBlockHeight    BigInt
+  restorationSignature      String
+}
+
 model reposts {
   repostKey              String  @id
   isTargetPost           Boolean
@@ -69,12 +125,4 @@ model reposts {
   deletionBlockHeight    BigInt
   restorationBlockHeight BigInt
   repostSignature        String
-}
-
-model restorations {
-  targetKey                 String
-  allRestorationsCounter    BigInt @id
-  targetRestorationsCounter BigInt
-  restorationBlockHeight    BigInt
-  restorationSignature      String
 }
