@@ -152,8 +152,9 @@ const provingPosts = 0;
 const provingReactions = 1;
 const provingComments = 2;
 const provingReposts = 3;
-const provingDeletions = 4;
-const provingRestorations = 5;
+const provingPostDeletions = 4;
+const provingPostRestorations = 5;
+const provingCommentDeletions = 6;
 let provingTurn = 0;
 
 while (true) {
@@ -747,9 +748,9 @@ while (true) {
           tries++;
         }
       }
-  } else if (provingTurn === provingDeletions) {
+  } else if (provingTurn === provingPostDeletions) {
 
-    const pendingDeletions = await prisma.deletions.findMany({
+    const pendingDeletions = await prisma.postDeletions.findMany({
       take: 1,
       orderBy: {
           allDeletionsCounter: 'asc'
@@ -782,7 +783,7 @@ while (true) {
           }
         });
 
-        const result = await proveDeletion(
+        const result = await provePostDeletion(
           target!.posterAddress,
           target!.postContentID,
           target!.allPostsCounter,
@@ -841,7 +842,7 @@ while (true) {
                   }
               });
 
-              await prisma.deletions.update({
+              await prisma.postDeletions.update({
                 where: {
                   allDeletionsCounter: pDeletion.allDeletionsCounter
                 },
@@ -888,9 +889,9 @@ while (true) {
           tries++;
         }
       }
-  } else if (provingTurn === provingRestorations) {
+  }  else if (provingTurn === provingPostRestorations) {
 
-    const pendingRestorations = await prisma.restorations.findMany({
+    const pendingRestorations = await prisma.postRestorations.findMany({
       take: 1,
       orderBy: {
           allRestorationsCounter: 'asc'
@@ -984,7 +985,7 @@ while (true) {
                   }
               });
 
-              await prisma.restorations.update({
+              await prisma.postRestorations.update({
                 where: {
                   allRestorationsCounter: pRestoration.allRestorationsCounter
                 },
@@ -1031,9 +1032,166 @@ while (true) {
           tries++;
         }
       }
+  } else if (provingTurn === provingCommentDeletions) {
+
+    const pendingCommentDeletions = await prisma.commentDeletions.findMany({
+      take: 1,
+      orderBy: {
+          allDeletionsCounter: 'asc'
+      },
+      where: {
+          deletionBlockHeight: 0
+      }
+      });
+      console.log('pendingCommentDeletions:');
+      console.log(pendingCommentDeletions);
+    
+      startTime = performance.now();
+    
+      const lastBlock = await fetchLastBlock(configReposts.url);
+      const deletionBlockHeight = lastBlock.blockchainLength.toBigint();
+      console.log(deletionBlockHeight);
+
+      const currentAllCommentsCounter = await prisma.comments.count();
+    
+      const transitionsAndProofs: {
+        transition: CommentsTransition,
+        proof: CommentsProof
+      }[] = [];
+    
+      for (const pDeletion of pendingCommentDeletions) {
+
+        const comment = await prisma.comments.findUnique({
+          where: {
+            commentKey: pDeletion.targetKey
+          }
+        });
+
+        const parent = await prisma.posts.findUnique({
+          where: {
+            postKey: comment!.targetKey
+          }
+        });
+
+        const result = await proveCommentDeletion(
+          parent,
+          comment!.isTargetPost,
+          comment!.targetKey,
+          comment!.commenterAddress,
+          comment!.commentContentID,
+          comment!.allCommentsCounter,
+          comment!.userCommentsCounter,
+          comment!.targetCommentsCounter,
+          comment!.commentBlockHeight,
+          comment!.restorationBlockHeight,
+          Field(comment!.commentKey),
+          pDeletion.deletionSignature,
+          Field(deletionBlockHeight),
+          Field(currentAllCommentsCounter)
+        );
+    
+        transitionsAndProofs.push(result);
+      }
+
+      if (transitionsAndProofs.length !== 0) {
+        await updateCommentsOnChainState(transitionsAndProofs);
+    
+        endTime = performance.now();
+        console.log(`${(endTime - startTime)/1000/60} minutes`);
+    
+        let tries = 0;
+        const maxTries = 50;
+        let allCommentsCounterFetch;
+        let usersCommentsCountersFetch;
+        let targetsCommentsCountersFetch;
+        let commentsFetch;
+        while (tries < maxTries) {
+          console.log('Pause to wait for the transaction to confirm...');
+          await delay(20000);
+    
+          allCommentsCounterFetch = await commentsContract.allCommentsCounter.fetch();
+          console.log('allPostsCounterFetch: ' + allCommentsCounterFetch?.toString());
+          usersCommentsCountersFetch = await commentsContract.usersCommentsCounters.fetch();
+          console.log('usersCommentsCountersFetch: ' + usersCommentsCountersFetch?.toString());
+          targetsCommentsCountersFetch = await commentsContract.targetsCommentsCounters.fetch();
+          console.log('targetsCommentsCountersFetch: ' + targetsCommentsCountersFetch?.toString());
+          commentsFetch = await commentsContract.comments.fetch();
+          console.log('commentsFetch: ' + commentsFetch?.toString());
+    
+          console.log(Field(commentsContext.numberOfComments).toString());
+          console.log(usersCommentsCountersMap.getRoot().toString());
+          console.log(targetsCommentsCountersMap.getRoot().toString());
+          console.log(commentsMap.getRoot().toString());
+    
+          console.log(allCommentsCounterFetch?.equals(Field(commentsContext.numberOfComments)).toBoolean());
+          console.log(usersCommentsCountersFetch?.equals(usersCommentsCountersMap.getRoot()).toBoolean());
+          console.log(targetsCommentsCountersFetch?.equals(targetsCommentsCountersMap.getRoot()).toBoolean());
+          console.log(commentsFetch?.equals(commentsMap.getRoot()).toBoolean());
+    
+          if (allCommentsCounterFetch?.equals(Field(commentsContext.numberOfComments)).toBoolean()
+          && usersCommentsCountersFetch?.equals(usersCommentsCountersMap.getRoot()).toBoolean()
+          && targetsCommentsCountersFetch?.equals(targetsCommentsCountersMap.getRoot()).toBoolean()
+          && commentsFetch?.equals(commentsMap.getRoot()).toBoolean()) {
+            for (const pDeletion of pendingCommentDeletions) {
+              await prisma.comments.update({
+                  where: {
+                    commentKey: pDeletion.targetKey
+                  },
+                  data: {
+                    deletionBlockHeight: deletionBlockHeight
+                  }
+              });
+
+              await prisma.commentDeletions.update({
+                where: {
+                  allDeletionsCounter: pDeletion.allDeletionsCounter
+                },
+                data: {
+                  deletionBlockHeight: deletionBlockHeight
+                }
+              });
+            }
+            tries = maxTries;
+          }
+          // Reset initial state if transaction appears to have failed
+          if (tries === maxTries - 1) {
+
+            for (const pDeletion of pendingCommentDeletions) {
+
+              const target = await prisma.posts.findUnique({
+                where: {
+                  postKey: pDeletion.targetKey
+                }
+              });
+
+              const posterAddress = PublicKey.fromBase58(target!.posterAddress);
+              const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
+              const postContentID = CircuitString.fromString(target!.postContentID);
+
+              const restoredTargetState = new PostState({
+                posterAddress: posterAddress,
+                postContentID: postContentID,
+                allPostsCounter: Field(target!.allPostsCounter),
+                userPostsCounter: Field(target!.userPostsCounter),
+                postBlockHeight: Field(target!.postBlockHeight),
+                deletionBlockHeight: Field(target!.deletionBlockHeight),
+                restorationBlockHeight: Field(target!.restorationBlockHeight)
+              });
+
+              console.log('Initial postsMap root: ' + postsMap.getRoot().toString());
+              postsMap.set(
+                  Poseidon.hash([posterAddressAsField, postContentID.hash()]),
+                  restoredTargetState.hash()
+              );
+              console.log('Latest postsMap root: ' + postsMap.getRoot().toString());
+            }
+          }
+          tries++;
+        }
+      }
   }
   provingTurn++;
-  if (provingTurn > provingRestorations) {
+  if (provingTurn > provingCommentDeletions) {
     provingTurn = 0;
     console.log('Pause to wait for new actions before running loop again...');
     await delay(10000);
@@ -1551,7 +1709,7 @@ async function updateRepostsOnChainState(transitionsAndProofs: {
 
 // ============================================================================
 
-async function proveDeletion(posterAddressBase58: string,
+async function provePostDeletion(posterAddressBase58: string,
   postCID: string, allPostsCounter: bigint, userPostsCounter: bigint,
   postBlockHeight: bigint, restorationBlockHeight: bigint,
   postKey: Field, signatureBase58: string, deletionBlockHeight: Field,
@@ -1677,6 +1835,110 @@ async function proveRestoration(posterAddressBase58: string,
         initialPostState,
         postWitness,
         restorationBlockHeight
+      );
+      console.log('Proof created');
+
+      return {transition: transition, proof: proof};
+}
+
+// ============================================================================
+
+async function proveCommentDeletion(parent: {
+    postKey: string;
+    posterAddress: string;
+    postContentID: string;
+    allPostsCounter: bigint;
+    userPostsCounter: bigint;
+    postBlockHeight: bigint;
+    deletionBlockHeight: bigint;
+    restorationBlockHeight: bigint;
+    postSignature: string;
+  } | null,
+  isTargetPost: boolean, targetKey: string, commenterAddressBase58: string,
+  commentCID: string, allCommentsCounter: bigint, userCommentsCounter: bigint, targetCommentsCounter: bigint,
+  commentBlockHeight: bigint, restorationBlockHeight: bigint, commentKey: Field, signatureBase58: string,
+  deletionBlockHeight: Field, currentAllCommentsCounter: Field) {
+
+  const signature = Signature.fromBase58(signatureBase58);
+  const commenterAddress = PublicKey.fromBase58(commenterAddressBase58);
+  const commentCIDAsCircuitString = CircuitString.fromString(commentCID.toString());
+
+      const initialCommentState = new CommentState({
+        isTargetPost: Bool(isTargetPost),
+        targetKey: Field(targetKey),
+        commenterAddress: commenterAddress,
+        commentContentID: commentCIDAsCircuitString,
+        allCommentsCounter: Field(allCommentsCounter),
+        userCommentsCounter: Field(userCommentsCounter),
+        targetCommentsCounter: Field(targetCommentsCounter),
+        commentBlockHeight: Field(commentBlockHeight),
+        deletionBlockHeight: Field(0),
+        restorationBlockHeight: Field(restorationBlockHeight)
+      });
+
+      const latestCommentsState = new CommentState({
+        isTargetPost: Bool(isTargetPost),
+        targetKey: Field(targetKey),
+        commenterAddress: commenterAddress,
+        commentContentID: commentCIDAsCircuitString,
+        allCommentsCounter: Field(allCommentsCounter),
+        userCommentsCounter: Field(userCommentsCounter),
+        targetCommentsCounter: Field(targetCommentsCounter),
+        commentBlockHeight: Field(commentBlockHeight),
+        deletionBlockHeight: deletionBlockHeight,
+        restorationBlockHeight: Field(restorationBlockHeight)
+      });
+
+      const usersCommentsCounters = usersCommentsCountersMap.getRoot();
+      const targetsCommentsCounters = targetsCommentsCountersMap.getRoot();
+
+      const initialComments = commentsMap.getRoot();
+      const commentWitness = commentsMap.getWitness(commentKey);
+      commentsMap.set(commentKey, latestCommentsState.hash());
+      const latestComments = commentsMap.getRoot();
+
+      const currentPosts = postsMap.getRoot();
+      const parentState = new PostState({
+        posterAddress: PublicKey.fromBase58(parent!.posterAddress),
+        postContentID: CircuitString.fromString(parent!.postContentID),
+        allPostsCounter: Field(parent!.allPostsCounter),
+        userPostsCounter: Field(parent!.userPostsCounter),
+        postBlockHeight: Field(parent!.postBlockHeight),
+        deletionBlockHeight: Field(parent!.deletionBlockHeight),
+        restorationBlockHeight: Field(parent!.restorationBlockHeight)
+      });
+      const parentWitness = postsMap.getWitness(Field(parent!.postKey));
+
+      const transition = CommentsTransition.createCommentDeletionTransition(
+        signature,
+        currentPosts,
+        parentState,
+        parentWitness,
+        currentAllCommentsCounter,
+        usersCommentsCounters,
+        targetsCommentsCounters,
+        initialComments,
+        latestComments,
+        initialCommentState,
+        commentWitness,
+        deletionBlockHeight
+      );
+      console.log('Transition created');
+      
+      const proof = await Comments.proveCommentDeletionTransition(
+        transition,
+        signature,
+        currentPosts,
+        parentState,
+        parentWitness,
+        currentAllCommentsCounter,
+        usersCommentsCounters,
+        targetsCommentsCounters,
+        initialComments,
+        latestComments,
+        initialCommentState,
+        commentWitness,
+        deletionBlockHeight
       );
       console.log('Proof created');
 
