@@ -1269,7 +1269,11 @@ server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
       const commentContentID = CircuitString.fromString(comment.commentContentID);
       const commentKey = Field(comment.commentKey);
       const commentWitness = commentsMap.getWitness(commentKey).toJSON();
-      const content = await fs.readFile('./comments/' + comment.commentContentID, 'utf8');
+
+      let content = '';
+      if (comment.deletionBlockHeight === BigInt(0)) {
+        const content = await fs.readFile('./comments/' + comment.commentContentID, 'utf8');
+      }
 
       const commentState = new CommentState({
         isTargetPost: Bool(comment.isTargetPost),
