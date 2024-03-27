@@ -92,13 +92,13 @@ console.log(`${(endTime - startTime)/1000/60} minutes`);
 
 const usersPostsCountersMap = new MerkleMap();
 const postsMap = new MerkleMap();
-let numberOfPosts = 0;
+let totalNumberOfPosts = 0;
 
 const postsContext = {
   prisma: prisma,
   usersPostsCountersMap: usersPostsCountersMap,
   postsMap: postsMap,
-  numberOfPosts: numberOfPosts
+  totalNumberOfPosts: totalNumberOfPosts
 }
 
 await regeneratePostsZkAppState(postsContext);
@@ -106,14 +106,14 @@ await regeneratePostsZkAppState(postsContext);
 const usersReactionsCountersMap = new MerkleMap();
 const targetsReactionsCountersMap =  new MerkleMap();
 const reactionsMap = new MerkleMap();
-let numberOfReactions = 0;
+let totalNumberOfReactions = 0;
 
 const reactionsContext = {
   prisma: prisma,
   usersReactionsCountersMap: usersReactionsCountersMap,
   targetsReactionsCountersMap: targetsReactionsCountersMap,
   reactionsMap: reactionsMap,
-  numberOfReactions: numberOfReactions
+  totalNumberOfReactions: totalNumberOfReactions
 }
 
 await regenerateReactionsZkAppState(reactionsContext);
@@ -121,14 +121,14 @@ await regenerateReactionsZkAppState(reactionsContext);
 const usersCommentsCountersMap = new MerkleMap();
 const targetsCommentsCountersMap =  new MerkleMap();
 const commentsMap = new MerkleMap();
-let numberOfComments = 0;
+let totalNumberOfComments = 0;
 
 const commentsContext = {
   prisma: prisma,
   usersCommentsCountersMap: usersCommentsCountersMap,
   targetsCommentsCountersMap: targetsCommentsCountersMap,
   commentsMap: commentsMap,
-  numberOfComments: numberOfComments
+  totalNumberOfComments: totalNumberOfComments
 }
 
 await regenerateCommentsZkAppState(commentsContext);
@@ -136,14 +136,14 @@ await regenerateCommentsZkAppState(commentsContext);
 const usersRepostsCountersMap = new MerkleMap();
 const targetsRepostsCountersMap =  new MerkleMap();
 const repostsMap = new MerkleMap();
-let numberOfReposts = 0;
+let totalNumberOfReposts = 0;
 
 const repostsContext = {
   prisma: prisma,
   usersRepostsCountersMap: usersRepostsCountersMap,
   targetsRepostsCountersMap: targetsRepostsCountersMap,
   repostsMap: repostsMap,
-  numberOfReposts: numberOfReposts
+  totalNumberOfReposts: totalNumberOfReposts
 }
 
 await regenerateRepostsZkAppState(repostsContext);
@@ -170,8 +170,8 @@ while (true) {
         postBlockHeight: 0
     }
     });
-    postsContext.numberOfPosts += pendingPosts.length;
-    console.log('Number of posts if update is successful: ' + postsContext.numberOfPosts);
+    postsContext.totalNumberOfPosts += pendingPosts.length;
+    console.log('Number of posts if update is successful: ' + postsContext.totalNumberOfPosts);
     console.log('pendingPosts:');
     console.log(pendingPosts);
   
@@ -223,15 +223,15 @@ while (true) {
         postsFetch = await postsContract.posts.fetch();
         console.log('postsFetch: ' + postsFetch?.toString());
   
-        console.log(Field(postsContext.numberOfPosts).toString());
+        console.log(Field(postsContext.totalNumberOfPosts).toString());
         console.log(usersPostsCountersMap.getRoot().toString());
         console.log(postsMap.getRoot().toString());
   
-        console.log(allPostsCounterFetch?.equals(Field(postsContext.numberOfPosts)).toBoolean());
+        console.log(allPostsCounterFetch?.equals(Field(postsContext.totalNumberOfPosts)).toBoolean());
         console.log(usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean());
         console.log(postsFetch?.equals(postsMap.getRoot()).toBoolean());
   
-        if (allPostsCounterFetch?.equals(Field(postsContext.numberOfPosts)).toBoolean()
+        if (allPostsCounterFetch?.equals(Field(postsContext.totalNumberOfPosts)).toBoolean()
         && usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean()
         && postsFetch?.equals(postsMap.getRoot()).toBoolean()) {
           for (const pPost of pendingPosts) {
@@ -253,8 +253,8 @@ while (true) {
         }
         // Reset initial state if transaction appears to have failed
         if (tries === maxTries - 1) {
-          postsContext.numberOfPosts -= pendingPosts.length;
-          console.log('Original number of posts: ' + postsContext.numberOfPosts);
+          postsContext.totalNumberOfPosts -= pendingPosts.length;
+          console.log('Original number of posts: ' + postsContext.totalNumberOfPosts);
   
           const pendingPosters = new Set(pendingPosts.map( post => post.posterAddress));
           for (const poster of pendingPosters) {
@@ -303,8 +303,8 @@ while (true) {
           reactionBlockHeight: 0
       }
       });
-      reactionsContext.numberOfReactions += pendingReactions.length;
-      console.log('Number of reactions if update is successful: ' + reactionsContext.numberOfReactions);
+      reactionsContext.totalNumberOfReactions += pendingReactions.length;
+      console.log('Number of reactions if update is successful: ' + reactionsContext.totalNumberOfReactions);
       console.log('pendingReactions:');
       console.log(pendingReactions);
     
@@ -362,17 +362,17 @@ while (true) {
           reactionsFetch = await reactionsContract.reactions.fetch();
           console.log('reactionsFetch: ' + reactionsFetch?.toString());
     
-          console.log(Field(reactionsContext.numberOfReactions).toString());
+          console.log(Field(reactionsContext.totalNumberOfReactions).toString());
           console.log(usersReactionsCountersMap.getRoot().toString());
           console.log(targetsReactionsCountersMap.getRoot().toString());
           console.log(reactionsMap.getRoot().toString());
     
-          console.log(allReactionsCounterFetch?.equals(Field(reactionsContext.numberOfReactions)).toBoolean());
+          console.log(allReactionsCounterFetch?.equals(Field(reactionsContext.totalNumberOfReactions)).toBoolean());
           console.log(userReactionsCounterFetch?.equals(usersReactionsCountersMap.getRoot()).toBoolean());
           console.log(targetReactionsCounterFetch?.equals(targetsReactionsCountersMap.getRoot()).toBoolean());
           console.log(reactionsFetch?.equals(reactionsMap.getRoot()).toBoolean());
     
-          if (allReactionsCounterFetch?.equals(Field(reactionsContext.numberOfReactions)).toBoolean()
+          if (allReactionsCounterFetch?.equals(Field(reactionsContext.totalNumberOfReactions)).toBoolean()
           && userReactionsCounterFetch?.equals(usersReactionsCountersMap.getRoot()).toBoolean()
           && targetReactionsCounterFetch?.equals(targetsReactionsCountersMap.getRoot()).toBoolean()
           && reactionsFetch?.equals(reactionsMap.getRoot()).toBoolean()) {
@@ -390,8 +390,8 @@ while (true) {
           }
           // Reset initial state if transaction appears to have failed
           if (tries === maxTries - 1) {
-            reactionsContext.numberOfReactions -= pendingReactions.length;
-            console.log('Original number of reactions: ' + postsContext.numberOfPosts);
+            reactionsContext.totalNumberOfReactions -= pendingReactions.length;
+            console.log('Original number of reactions: ' + reactionsContext.totalNumberOfReactions);
     
             const pendingReactors = new Set(pendingReactions.map( reaction => reaction.reactorAddress));
             for (const reactor of pendingReactors) {
@@ -455,8 +455,8 @@ while (true) {
           commentBlockHeight: 0
       }
       });
-      commentsContext.numberOfComments += pendingComments.length;
-      console.log('Number of comments if update is successful: ' + commentsContext.numberOfComments);
+      commentsContext.totalNumberOfComments += pendingComments.length;
+      console.log('Number of comments if update is successful: ' + commentsContext.totalNumberOfComments);
       console.log('pendingComments:');
       console.log(pendingComments);
     
@@ -514,17 +514,17 @@ while (true) {
           commentsFetch = await commentsContract.comments.fetch();
           console.log('commentsFetch: ' + commentsFetch?.toString());
     
-          console.log(Field(commentsContext.numberOfComments).toString());
+          console.log(Field(commentsContext.totalNumberOfComments).toString());
           console.log(usersCommentsCountersMap.getRoot().toString());
           console.log(targetsCommentsCountersMap.getRoot().toString());
           console.log(commentsMap.getRoot().toString());
     
-          console.log(allCommentsCounterFetch?.equals(Field(commentsContext.numberOfComments)).toBoolean());
+          console.log(allCommentsCounterFetch?.equals(Field(commentsContext.totalNumberOfComments)).toBoolean());
           console.log(userCommentsCounterFetch?.equals(usersCommentsCountersMap.getRoot()).toBoolean());
           console.log(targetCommentsCounterFetch?.equals(targetsCommentsCountersMap.getRoot()).toBoolean());
           console.log(commentsFetch?.equals(commentsMap.getRoot()).toBoolean());
     
-          if (allCommentsCounterFetch?.equals(Field(commentsContext.numberOfComments)).toBoolean()
+          if (allCommentsCounterFetch?.equals(Field(commentsContext.totalNumberOfComments)).toBoolean()
           && userCommentsCounterFetch?.equals(usersCommentsCountersMap.getRoot()).toBoolean()
           && targetCommentsCounterFetch?.equals(targetsCommentsCountersMap.getRoot()).toBoolean()
           && commentsFetch?.equals(commentsMap.getRoot()).toBoolean()) {
@@ -542,8 +542,8 @@ while (true) {
           }
           // Reset initial state if transaction appears to have failed
           if (tries === maxTries - 1) {
-            commentsContext.numberOfComments -= pendingComments.length;
-            console.log('Original number of comments: ' + postsContext.numberOfPosts);
+            commentsContext.totalNumberOfComments -= pendingComments.length;
+            console.log('Original number of comments: ' + commentsContext.totalNumberOfComments);
     
             const pendingCommenters = new Set(pendingComments.map( comment => comment.commenterAddress));
             for (const commenter of pendingCommenters) {
@@ -608,8 +608,8 @@ while (true) {
           repostBlockHeight: 0
       }
       });
-      repostsContext.numberOfReposts += pendingReposts.length;
-      console.log('Number of reposts if update is successful: ' + repostsContext.numberOfReposts);
+      repostsContext.totalNumberOfReposts += pendingReposts.length;
+      console.log('Number of reposts if update is successful: ' + repostsContext.totalNumberOfReposts);
       console.log('pendingReposts:');
       console.log(pendingReposts);
     
@@ -666,17 +666,17 @@ while (true) {
           repostsFetch = await repostsContract.reposts.fetch();
           console.log('repostsFetch: ' + repostsFetch?.toString());
     
-          console.log(Field(repostsContext.numberOfReposts).toString());
+          console.log(Field(repostsContext.totalNumberOfReposts).toString());
           console.log(usersRepostsCountersMap.getRoot().toString());
           console.log(targetsRepostsCountersMap.getRoot().toString());
           console.log(repostsMap.getRoot().toString());
     
-          console.log(allRepostsCounterFetch?.equals(Field(repostsContext.numberOfReposts)).toBoolean());
+          console.log(allRepostsCounterFetch?.equals(Field(repostsContext.totalNumberOfReposts)).toBoolean());
           console.log(userRepostsCounterFetch?.equals(usersRepostsCountersMap.getRoot()).toBoolean());
           console.log(targetRepostsCounterFetch?.equals(targetsRepostsCountersMap.getRoot()).toBoolean());
           console.log(repostsFetch?.equals(repostsMap.getRoot()).toBoolean());
     
-          if (allRepostsCounterFetch?.equals(Field(repostsContext.numberOfReposts)).toBoolean()
+          if (allRepostsCounterFetch?.equals(Field(repostsContext.totalNumberOfReposts)).toBoolean()
           && userRepostsCounterFetch?.equals(usersRepostsCountersMap.getRoot()).toBoolean()
           && targetRepostsCounterFetch?.equals(targetsRepostsCountersMap.getRoot()).toBoolean()
           && repostsFetch?.equals(repostsMap.getRoot()).toBoolean()) {
@@ -694,8 +694,8 @@ while (true) {
           }
           // Reset initial state if transaction appears to have failed
           if (tries === maxTries - 1) {
-            repostsContext.numberOfReposts -= pendingReposts.length;
-            console.log('Original number of reposts: ' + postsContext.numberOfPosts);
+            repostsContext.totalNumberOfReposts -= pendingReposts.length;
+            console.log('Original number of reposts: ' + repostsContext.totalNumberOfReposts);
     
             const pendingReposters = new Set(pendingReposts.map( repost => repost.reposterAddress));
             for (const reposter of pendingReposters) {
@@ -821,15 +821,15 @@ while (true) {
           postsFetch = await postsContract.posts.fetch();
           console.log('postsFetch: ' + postsFetch?.toString());
     
-          console.log(Field(postsContext.numberOfPosts).toString());
+          console.log(Field(postsContext.totalNumberOfPosts).toString());
           console.log(usersPostsCountersMap.getRoot().toString());
           console.log(postsMap.getRoot().toString());
     
-          console.log(allPostsCounterFetch?.equals(Field(postsContext.numberOfPosts)).toBoolean());
+          console.log(allPostsCounterFetch?.equals(Field(postsContext.totalNumberOfPosts)).toBoolean());
           console.log(usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean());
           console.log(postsFetch?.equals(postsMap.getRoot()).toBoolean());
     
-          if (allPostsCounterFetch?.equals(Field(postsContext.numberOfPosts)).toBoolean()
+          if (allPostsCounterFetch?.equals(Field(postsContext.totalNumberOfPosts)).toBoolean()
           && usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean()
           && postsFetch?.equals(postsMap.getRoot()).toBoolean()) {
             for (const pDeletion of pendingDeletions) {
@@ -963,15 +963,15 @@ while (true) {
           postsFetch = await postsContract.posts.fetch();
           console.log('postsFetch: ' + postsFetch?.toString());
     
-          console.log(Field(postsContext.numberOfPosts).toString());
+          console.log(Field(postsContext.totalNumberOfPosts).toString());
           console.log(usersPostsCountersMap.getRoot().toString());
           console.log(postsMap.getRoot().toString());
     
-          console.log(allPostsCounterFetch?.equals(Field(postsContext.numberOfPosts)).toBoolean());
+          console.log(allPostsCounterFetch?.equals(Field(postsContext.totalNumberOfPosts)).toBoolean());
           console.log(usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean());
           console.log(postsFetch?.equals(postsMap.getRoot()).toBoolean());
     
-          if (allPostsCounterFetch?.equals(Field(postsContext.numberOfPosts)).toBoolean()
+          if (allPostsCounterFetch?.equals(Field(postsContext.totalNumberOfPosts)).toBoolean()
           && usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean()
           && postsFetch?.equals(postsMap.getRoot()).toBoolean()) {
             for (const pRestoration of pendingRestorations) {
@@ -1118,17 +1118,17 @@ while (true) {
           commentsFetch = await commentsContract.comments.fetch();
           console.log('commentsFetch: ' + commentsFetch?.toString());
     
-          console.log(Field(commentsContext.numberOfComments).toString());
+          console.log(Field(commentsContext.totalNumberOfComments).toString());
           console.log(usersCommentsCountersMap.getRoot().toString());
           console.log(targetsCommentsCountersMap.getRoot().toString());
           console.log(commentsMap.getRoot().toString());
     
-          console.log(allCommentsCounterFetch?.equals(Field(commentsContext.numberOfComments)).toBoolean());
+          console.log(allCommentsCounterFetch?.equals(Field(commentsContext.totalNumberOfComments)).toBoolean());
           console.log(usersCommentsCountersFetch?.equals(usersCommentsCountersMap.getRoot()).toBoolean());
           console.log(targetsCommentsCountersFetch?.equals(targetsCommentsCountersMap.getRoot()).toBoolean());
           console.log(commentsFetch?.equals(commentsMap.getRoot()).toBoolean());
     
-          if (allCommentsCounterFetch?.equals(Field(commentsContext.numberOfComments)).toBoolean()
+          if (allCommentsCounterFetch?.equals(Field(commentsContext.totalNumberOfComments)).toBoolean()
           && usersCommentsCountersFetch?.equals(usersCommentsCountersMap.getRoot()).toBoolean()
           && targetsCommentsCountersFetch?.equals(targetsCommentsCountersMap.getRoot()).toBoolean()
           && commentsFetch?.equals(commentsMap.getRoot()).toBoolean()) {

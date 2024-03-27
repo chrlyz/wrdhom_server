@@ -8,7 +8,7 @@ export async function regeneratePostsZkAppState(context: {
     prisma: PrismaClient,
     usersPostsCountersMap: MerkleMap,
     postsMap: MerkleMap,
-    numberOfPosts: number
+    totalNumberOfPosts: number
 }
 ) {
     const posts = await context.prisma.posts.findMany({
@@ -66,8 +66,8 @@ export async function regeneratePostsZkAppState(context: {
       console.log('Latest postsMap root: ' + context.postsMap.getRoot().toString());
     });
     
-    context.numberOfPosts = posts.length;
-    console.log('Original number of posts: ' + context.numberOfPosts);
+    context.totalNumberOfPosts = posts.length;
+    console.log('Original number of posts: ' + context.totalNumberOfPosts);
 
     return posts;
 }
@@ -79,7 +79,7 @@ export async function regenerateReactionsZkAppState(context: {
   usersReactionsCountersMap: MerkleMap,
   targetsReactionsCountersMap: MerkleMap,
   reactionsMap: MerkleMap,
-  numberOfReactions: number
+  totalNumberOfReactions: number
 }
 ) {
   const reactions = await context.prisma.reactions.findMany({
@@ -165,8 +165,8 @@ export async function regenerateReactionsZkAppState(context: {
     console.log('Latest reactionsMap root: ' + context.reactionsMap.getRoot().toString());
   });
   
-  context.numberOfReactions = reactions.length;
-  console.log('Original number of reactions: ' + context.numberOfReactions);
+  context.totalNumberOfReactions = reactions.length;
+  console.log('Original number of reactions: ' + context.totalNumberOfReactions);
 
   return reactions;
 }
@@ -178,7 +178,7 @@ export async function regenerateCommentsZkAppState(context: {
   usersCommentsCountersMap: MerkleMap,
   targetsCommentsCountersMap: MerkleMap,
   commentsMap: MerkleMap,
-  numberOfComments: number
+  totalNumberOfComments: number
 }
 ) {
   const comments = await context.prisma.comments.findMany({
@@ -265,8 +265,8 @@ export async function regenerateCommentsZkAppState(context: {
     console.log('Latest commentsMap root: ' + context.commentsMap.getRoot().toString());
   });
   
-  context.numberOfComments = comments.length;
-  console.log('Original number of comments: ' + context.numberOfComments);
+  context.totalNumberOfComments = comments.length;
+  console.log('Original number of comments: ' + context.totalNumberOfComments);
 
   return comments;
 }
@@ -278,7 +278,7 @@ export async function regenerateRepostsZkAppState(context: {
   usersRepostsCountersMap: MerkleMap,
   targetsRepostsCountersMap: MerkleMap,
   repostsMap: MerkleMap,
-  numberOfReposts: number
+  totalNumberOfReposts: number
 }
 ) {
   const reposts = await context.prisma.reposts.findMany({
@@ -363,8 +363,8 @@ export async function regenerateRepostsZkAppState(context: {
     console.log('Latest repostsMap root: ' + context.repostsMap.getRoot().toString());
   });
   
-  context.numberOfReposts = reposts.length;
-  console.log('Original number of reposts: ' + context.numberOfReposts);
+  context.totalNumberOfReposts = reposts.length;
+  console.log('Original number of reposts: ' + context.totalNumberOfReposts);
 
   return reposts;
 }
