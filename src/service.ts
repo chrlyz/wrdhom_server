@@ -42,13 +42,13 @@ await web3storage.setCurrentSpace(process.env.W3S_SPACE as `did:${string}:${stri
 
 const usersPostsCountersMap = new MerkleMap();
 const postsMap = new MerkleMap();
-let numberOfPosts = 0;
+let totalNumberOfPosts = 0;
 
 const postsContext = {
   prisma: prisma,
   usersPostsCountersMap: usersPostsCountersMap,
   postsMap: postsMap,
-  numberOfPosts: numberOfPosts
+  totalNumberOfPosts: totalNumberOfPosts
 }
 
 const posts = await regeneratePostsZkAppState(postsContext);
@@ -56,14 +56,14 @@ const posts = await regeneratePostsZkAppState(postsContext);
 const usersReactionsCountersMap = new MerkleMap();
 const targetsReactionsCountersMap =  new MerkleMap();
 const reactionsMap = new MerkleMap();
-let numberOfReactions = 0;
+let totalNumberOfReactions = 0;
 
 const reactionsContext = {
   prisma: prisma,
   usersReactionsCountersMap: usersReactionsCountersMap,
   targetsReactionsCountersMap: targetsReactionsCountersMap,
   reactionsMap: reactionsMap,
-  numberOfReactions: numberOfReactions
+  totalNumberOfReactions: totalNumberOfReactions
 }
 
 await regenerateReactionsZkAppState(reactionsContext);
@@ -71,14 +71,14 @@ await regenerateReactionsZkAppState(reactionsContext);
 const usersCommentsCountersMap = new MerkleMap();
 const targetsCommentsCountersMap =  new MerkleMap();
 const commentsMap = new MerkleMap();
-let numberOfComments = 0;
+let totalNumberOfComments = 0;
 
 const commentsContext = {
   prisma: prisma,
   usersCommentsCountersMap: usersCommentsCountersMap,
   targetsCommentsCountersMap: targetsCommentsCountersMap,
   commentsMap: commentsMap,
-  numberOfComments: numberOfComments
+  totalNumberOfComments: totalNumberOfComments
 }
 
 const comments = await regenerateCommentsZkAppState(commentsContext);
@@ -86,14 +86,14 @@ const comments = await regenerateCommentsZkAppState(commentsContext);
 const usersRepostsCountersMap = new MerkleMap();
 const targetsRepostsCountersMap =  new MerkleMap();
 const repostsMap = new MerkleMap();
-let numberOfReposts = 0;
+let totalNumberOfReposts = 0;
 
 const repostsContext = {
   prisma: prisma,
   usersRepostsCountersMap: usersRepostsCountersMap,
   targetsRepostsCountersMap: targetsRepostsCountersMap,
   repostsMap: repostsMap,
-  numberOfReposts: numberOfReposts
+  totalNumberOfReposts: totalNumberOfReposts
 }
 
 await regenerateRepostsZkAppState(repostsContext);
@@ -105,8 +105,8 @@ const postDeletions = await prisma.postDeletions.findMany({
     }
   }
 });
-let numberOfPostDeletions = postDeletions.length;
-console.log('numberOfPostDeletions: ' + numberOfPostDeletions)
+let totalNumberOfPostDeletions = postDeletions.length;
+console.log('totalNumberOfPostDeletions: ' + totalNumberOfPostDeletions)
 
 const postRestorations = await prisma.postRestorations.findMany({
   where: {
@@ -115,8 +115,8 @@ const postRestorations = await prisma.postRestorations.findMany({
     }
   }
 });
-let numberOfPostRestorations = postRestorations.length;
-console.log('numberOfPostRestorations: ' + numberOfPostRestorations);
+let totalNumberOfPostRestorations = postRestorations.length;
+console.log('totalNumberOfPostRestorations: ' + totalNumberOfPostRestorations);
 
 const commentDeletions = await prisma.commentDeletions.findMany({
   where: {
@@ -125,8 +125,8 @@ const commentDeletions = await prisma.commentDeletions.findMany({
     }
   }
 });
-let numberOfCommentDeletions = commentDeletions.length;
-console.log('numberOfCommentDeletions: ' + numberOfCommentDeletions);
+let totalNumberOfCommentDeletions = commentDeletions.length;
+console.log('totalNumberOfCommentDeletions: ' + totalNumberOfCommentDeletions);
 
 // Get content and keep it locally for faster reponses
 
@@ -202,7 +202,7 @@ const syncStateTask = new AsyncTask(
       },
       where: {
         allPostsCounter: {
-          gt: postsContext.numberOfPosts
+          gt: postsContext.totalNumberOfPosts
         },
         postBlockHeight: {
           not: 0
@@ -226,7 +226,7 @@ const syncStateTask = new AsyncTask(
 
       const postKey = Field(pPost.postKey);
       postsMap.set(postKey, postState.hash());
-      postsContext.numberOfPosts += 1;
+      postsContext.totalNumberOfPosts += 1;
     }
 
     const pendingReactions = await prisma.reactions.findMany({
@@ -235,7 +235,7 @@ const syncStateTask = new AsyncTask(
       },
       where: {
         allReactionsCounter: {
-          gt: reactionsContext.numberOfReactions
+          gt: reactionsContext.totalNumberOfReactions
         },
         reactionBlockHeight: {
           not: 0
@@ -271,7 +271,7 @@ const syncStateTask = new AsyncTask(
       usersReactionsCountersMap.set(targetPosterAddress, Field(pReaction.userReactionsCounter));
       targetsReactionsCountersMap.set(Field(target!.postKey), Field(pReaction.targetReactionsCounter));
 
-      reactionsContext.numberOfReactions += 1;
+      reactionsContext.totalNumberOfReactions += 1;
     }
 
     const pendingComments = await prisma.comments.findMany({
@@ -280,7 +280,7 @@ const syncStateTask = new AsyncTask(
       },
       where: {
         allCommentsCounter: {
-          gt: commentsContext.numberOfComments
+          gt: commentsContext.totalNumberOfComments
         },
         commentBlockHeight: {
           not: 0
@@ -319,7 +319,7 @@ const syncStateTask = new AsyncTask(
       usersCommentsCountersMap.set(targetPosterAddress, Field(pComment.userCommentsCounter));
       targetsCommentsCountersMap.set(Field(target!.postKey), Field(pComment.targetCommentsCounter));
 
-      commentsContext.numberOfComments += 1;
+      commentsContext.totalNumberOfComments += 1;
     }
 
     const pendingReposts = await prisma.reposts.findMany({
@@ -328,7 +328,7 @@ const syncStateTask = new AsyncTask(
       },
       where: {
         allRepostsCounter: {
-          gt: repostsContext.numberOfReposts
+          gt: repostsContext.totalNumberOfReposts
         },
         repostBlockHeight: {
           not: 0
@@ -362,13 +362,13 @@ const syncStateTask = new AsyncTask(
       usersRepostsCountersMap.set(targetPosterAddress, Field(pRepost.userRepostsCounter));
       targetsRepostsCountersMap.set(Field(target!.postKey), Field(pRepost.targetRepostsCounter));
 
-      repostsContext.numberOfReposts += 1;
+      repostsContext.totalNumberOfReposts += 1;
     }
 
     const pendingPostDeletions = await prisma.postDeletions.findMany({
       where: {
         allDeletionsCounter: {
-          gt: numberOfPostDeletions,
+          gt: totalNumberOfPostDeletions,
         },
         deletionBlockHeight: {
           gt: 0
@@ -396,13 +396,13 @@ const syncStateTask = new AsyncTask(
 
       const postKey = Field(target!.postKey);
       postsMap.set(postKey, postState.hash());
-      numberOfPostDeletions += 1;
+      totalNumberOfPostDeletions += 1;
     }
 
     const pendingPostRestorations = await prisma.postRestorations.findMany({
       where: {
         allRestorationsCounter: {
-          gt: numberOfPostRestorations
+          gt: totalNumberOfPostRestorations
         },
         restorationBlockHeight: {
           gt: 0
@@ -430,13 +430,13 @@ const syncStateTask = new AsyncTask(
 
       const postKey = Field(target!.postKey);
       postsMap.set(postKey, postState.hash());
-      numberOfPostRestorations += 1;
+      totalNumberOfPostRestorations += 1;
     }
 
     const pendingCommentDeletions = await prisma.commentDeletions.findMany({
       where: {
         allDeletionsCounter: {
-          gt: numberOfCommentDeletions,
+          gt: totalNumberOfCommentDeletions,
         },
         deletionBlockHeight: {
           gt: 0
@@ -467,7 +467,7 @@ const syncStateTask = new AsyncTask(
 
       const commentKey = Field(target!.commentKey);
       postsMap.set(commentKey, commentState.hash());
-      numberOfCommentDeletions += 1;
+      totalNumberOfCommentDeletions += 1;
     }
   },
   (e) => {console.error(e)}
@@ -1091,23 +1091,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       });
     }
 
-    const postsResponse: {
-      postState: string,
-      postKey: string,
-      postContentID: string,
-      content: string,
-      postWitness: string,
-      reactionsResponse: {
-        reactionState: string,
-        reactionWitness: string
-      }[],
-      numberOfReactions: number,
-      numberOfReactionsWitness: string,
-      numberOfComments: number,
-      numberOfCommentsWitness: string,
-      numberOfReposts: number,
-      numberOfRepostsWitness: string
-    }[] = [];
+    const postsResponse: PostsResponse[] = [];
 
     for (const post of posts) {
       const posterAddress = PublicKey.fromBase58(post.posterAddress);
@@ -1143,17 +1127,12 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       });
       const numberOfReactions = postReactions.length;
       const numberOfReactionsWitness = targetsReactionsCountersMap.getWitness(postKey).toJSON();
-
-      const reactionsResponse: {
-        reactionState: string,
-        reactionWitness: string
-      }[] = [];
+      const embeddedReactions: EmbeddedReactions[] = [];
 
       for (const reaction of postReactions) {
         const reactorAddress = PublicKey.fromBase58(reaction.reactorAddress);
-        const reactorAddressAsField = Poseidon.hash(reactorAddress.toFields());
         const reactionCodePointAsField = Field(reaction.reactionCodePoint);
-        const reactionKey = Poseidon.hash([postKey, reactorAddressAsField, reactionCodePointAsField]);
+        const reactionKey = Field(reaction.reactionKey);
         const reactionWitness = reactionsMap.getWitness(reactionKey).toJSON();
 
         const reactionState = new ReactionState({
@@ -1169,15 +1148,18 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
           restorationBlockHeight: Field(reaction.restorationBlockHeight)
         });
 
-        reactionsResponse.push({
+        embeddedReactions.push({
           reactionState: JSON.stringify(reactionState),
           reactionWitness: JSON.stringify(reactionWitness)
         })
       }
 
       const postComments = await prisma.comments.findMany({
+        orderBy: {
+          allCommentsCounter: 'desc'
+        },
         where: {
-          targetKey: post.postKey,
+          targetKey: postKey.toString(),
           commentBlockHeight: {
             not: 0
           }
@@ -1185,6 +1167,32 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       });
       const numberOfComments = postComments.length;
       const numberOfCommentsWitness = targetsCommentsCountersMap.getWitness(postKey).toJSON();
+      const embeddedComments: EmbeddedComments[] = [];
+
+      for (const comment of postComments) {
+        const commenterAddress = PublicKey.fromBase58(comment.commenterAddress);
+        const commentContentID = CircuitString.fromString(comment.commentContentID);
+        const commentKey = Field(comment.commentKey);
+        const commentWitness = commentsMap.getWitness(commentKey).toJSON();
+
+        const commentState = new CommentState({
+          isTargetPost: Bool(comment.isTargetPost),
+          targetKey: postKey,
+          commenterAddress: commenterAddress,
+          commentContentID: commentContentID,
+          allCommentsCounter: Field(comment.allCommentsCounter),
+          userCommentsCounter: Field(comment.userCommentsCounter),
+          targetCommentsCounter: Field(comment.targetCommentsCounter),
+          commentBlockHeight: Field(comment.commentBlockHeight),
+          deletionBlockHeight: Field(comment.deletionBlockHeight),
+          restorationBlockHeight: Field(comment.restorationBlockHeight)
+        });
+
+        embeddedComments.push({
+          commentState: JSON.stringify(commentState),
+          commentWitness: JSON.stringify(commentWitness)
+        })
+      }
 
       const postReposts = await prisma.reposts.findMany({
         where: {
@@ -1203,9 +1211,10 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         postContentID: post.postContentID,
         content: content,
         postWitness: JSON.stringify(postWitness),
-        reactionsResponse: reactionsResponse,
+        embeddedReactions: embeddedReactions,
         numberOfReactions: numberOfReactions,
         numberOfReactionsWitness: JSON.stringify(numberOfReactionsWitness),
+        embeddedComments: embeddedComments,
         numberOfComments: numberOfComments,
         numberOfCommentsWitness: JSON.stringify(numberOfCommentsWitness),
         numberOfReposts: numberOfReposts,
@@ -1256,13 +1265,7 @@ server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
       }
     });
 
-    const commentsResponse: {
-      commentState: string,
-      commentKey: string,
-      commentContentID: string,
-      content: string,
-      commentWitness: string,
-    }[] = [];
+    const commentsResponse: CommentsResponse[] = [];
 
     for (const comment of comments) {
       const commenterAddress = PublicKey.fromBase58(comment.commenterAddress);
@@ -1391,10 +1394,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
       postContentID: string,
       content: string,
       postWitness: string,
-      reactionsResponse: {
-        reactionState: string,
-        reactionWitness: string
-      }[],
+      embeddedReactions: EmbeddedReactions[],
       numberOfReactions: number,
       numberOfReactionsWitness: string,
       numberOfComments: number,
@@ -1457,10 +1457,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
       const numberOfReactions = postReactions.length;
       const numberOfReactionsWitness = targetsReactionsCountersMap.getWitness(postKey).toJSON();
 
-      const reactionsResponse: {
-        reactionState: string,
-        reactionWitness: string
-      }[] = [];
+      const embeddedReactions: EmbeddedReactions[] = [];
 
       for (const reaction of postReactions) {
         const reactorAddress = PublicKey.fromBase58(reaction.reactorAddress);
@@ -1482,7 +1479,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
           restorationBlockHeight: Field(reaction.restorationBlockHeight)
         });
 
-        reactionsResponse.push({
+        embeddedReactions.push({
           reactionState: JSON.stringify(reactionState),
           reactionWitness: JSON.stringify(reactionWitness)
         })
@@ -1519,7 +1516,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
         postContentID: post!.postContentID,
         content: content,
         postWitness: JSON.stringify(postWitness),
-        reactionsResponse: reactionsResponse,
+        embeddedReactions: embeddedReactions,
         numberOfReactions: numberOfReactions,
         numberOfReactionsWitness: JSON.stringify(numberOfReactionsWitness),
         numberOfComments: numberOfComments,
@@ -1612,6 +1609,48 @@ interface SignedCommentDeletion {
 interface SignedPostRestoration {
   postKey: string,
   signedData: SignedData
+}
+
+// ============================================================================
+
+type EmbeddedReactions = {
+  reactionState: string,
+  reactionWitness: string
+}
+
+// ============================================================================
+
+type EmbeddedComments = {
+  commentState: string,
+  commentWitness: string
+}
+
+// ============================================================================
+
+type PostsResponse = {
+  postState: string,
+  postKey: string,
+  postContentID: string,
+  content: string,
+  postWitness: string,
+  embeddedReactions: EmbeddedReactions[],
+  numberOfReactions: number,
+  numberOfReactionsWitness: string,
+  embeddedComments: EmbeddedComments[],
+  numberOfComments: number,
+  numberOfCommentsWitness: string,
+  numberOfReposts: number,
+  numberOfRepostsWitness: string
+}
+
+// ============================================================================
+
+type CommentsResponse = {
+  commentState: string,
+  commentKey: string,
+  commentContentID: string,
+  content: string,
+  commentWitness: string,
 }
 
 // ============================================================================
