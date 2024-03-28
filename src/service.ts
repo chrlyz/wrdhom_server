@@ -13,7 +13,8 @@ import { CommentState, PostState, ReactionState, fieldToFlagTargetAsReposted,
   RepostState,
   fieldToFlagPostsAsDeleted,
   fieldToFlagPostsAsRestored,
-  fieldToFlagCommentsAsDeleted
+  fieldToFlagCommentsAsDeleted,
+  fieldToFlagCommentsAsRestored
 } from 'wrdhom';
 import fs from 'fs/promises';
 import { fastifySchedule } from '@fastify/schedule';
@@ -127,6 +128,16 @@ const commentDeletions = await prisma.commentDeletions.findMany({
 });
 let totalNumberOfCommentDeletions = commentDeletions.length;
 console.log('totalNumberOfCommentDeletions: ' + totalNumberOfCommentDeletions);
+
+const commentRestorations = await prisma.commentRestorations.findMany({
+  where: {
+    restorationBlockHeight: {
+      gt: 0
+    }
+  }
+});
+let totalNumberOfCommentRestorations = commentRestorations.length;
+console.log('totalNumberOfCommentRestorations: ' + totalNumberOfCommentRestorations);
 
 // Get content and keep it locally for faster reponses
 
@@ -466,8 +477,45 @@ const syncStateTask = new AsyncTask(
       });
 
       const commentKey = Field(target!.commentKey);
-      postsMap.set(commentKey, commentState.hash());
+      commentsMap.set(commentKey, commentState.hash());
       totalNumberOfCommentDeletions += 1;
+    }
+
+    const pendingCommentRestorations = await prisma.commentRestorations.findMany({
+      where: {
+        allRestorationsCounter: {
+          gt: totalNumberOfCommentRestorations,
+        },
+        restorationBlockHeight: {
+          gt: 0
+        }
+      }
+    });
+
+    for (const pCommentRestoration of pendingCommentRestorations) {
+      const target = await prisma.comments.findUnique({
+        where: {
+          commentKey: pCommentRestoration.targetKey
+        }
+      });
+
+      console.log(pCommentRestoration);
+      const commentState = new CommentState({
+        isTargetPost: Bool(target!.isTargetPost),
+        targetKey: Field(target!.targetKey),
+        commenterAddress: PublicKey.fromBase58(target!.commenterAddress),
+        commentContentID: CircuitString.fromString(target!.commentContentID),
+        allCommentsCounter: Field(target!.allCommentsCounter),
+        userCommentsCounter: Field(target!.userCommentsCounter),
+        targetCommentsCounter: Field(target!.targetCommentsCounter),
+        commentBlockHeight: Field(target!.commentBlockHeight),
+        deletionBlockHeight: Field(target!.deletionBlockHeight),
+        restorationBlockHeight: Field(target!.restorationBlockHeight)
+      });
+
+      const commentKey = Field(target!.commentKey);
+      commentsMap.set(commentKey, commentState.hash());
+      totalNumberOfCommentRestorations += 1;
     }
   },
   (e) => {console.error(e)}
@@ -508,7 +556,10 @@ server.post<{Body: SignedPost}>('/posts', async (request) => {
   });
 
   if (post !== null && Number(post?.deletionBlockHeight) !== 0) {
-    return 'Restore?'
+    return {
+      postKey: postKey.toString(),
+      option: 'Restore?'
+    }
   }
 
   // Check that content and signed CID match
@@ -545,7 +596,7 @@ server.post<{Body: SignedPost}>('/posts', async (request) => {
 
       await web3storage.uploadFile(file);
       await createSQLPost(postKey, signature, posterAddress, allPostsCounter, userPostsCounter, postCID);
-      return request.body;
+      return {message: 'Valid Post!'};
     } else {
         return `Post isn't signed`;
     }
@@ -635,11 +686,10 @@ server.post<{Body: SignedComment}>('/comments', async (request) => {
     }
   });
 
-  if (post?.posterAddress === undefined) {
-    return `The target you are trying to react to doesn't exist`;
+  if (post === null) {
+    return `The target you are trying to comment on doesn't exist`;
   }
 
-  // Check that content and signed CID match
   const signature = Signature.fromBase58(request.body.signedData.signature);
   const commenterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
   const commenterAddressAsField = Poseidon.hash(commenterAddress.toFields());
@@ -649,6 +699,21 @@ server.post<{Body: SignedComment}>('/comments', async (request) => {
   const commentContentIDAsField = Field(request.body.signedData.data[1]);
   const commentContentIDAsBigInt = commentContentIDAsField.toBigInt();
   const commentKey = Poseidon.hash([targetKey, commenterAddressAsField, commentContentIDAsField]);
+
+  const comment = await prisma.comments.findUnique({
+    where: {
+      commentKey: commentKey.toString()
+    }
+  });
+
+  if (comment !== null && Number(comment?.deletionBlockHeight) !== 0) {
+    return {
+      commentKey: commentKey.toString(),
+      option: 'Restore?'
+    }
+  }
+
+  // Check that content and signed CID match
   const file = new Blob([request.body.comment]);
   const commentCID = await getCID(file);
   console.log('commentCID: ' + commentCID);
@@ -692,7 +757,7 @@ server.post<{Body: SignedComment}>('/comments', async (request) => {
       await createSQLComment(commentKey, targetKey, request.body.signedData.publicKey,
         commentCID, allCommentsCounter, userCommentsCounter, targetCommentsCounter,
         request.body.signedData.signature);
-      return 'Valid Comment!';
+      return {message: 'Valid Comment!'};
     } else {
         return `Comment isn't signed`;
     }
@@ -914,7 +979,7 @@ server.post<{Body: SignedCommentDeletion}>('/comments/delete', async (request) =
 
     return 'Valid Comment Deletion!';
   } else {
-    return 'Post deletion message is not signed';
+    return 'Comment deletion message is not signed';
   }
 });
 
@@ -994,6 +1059,86 @@ server.post<{Body: SignedPostRestoration}>('/posts/restore', async (request) => 
     return 'Valid Restoration!';
   } else {
     return 'Post restoration message is not signed';
+  }
+});
+
+// ============================================================================
+
+server.post<{Body: SignedCommentRestoration}>('/comments/restore', async (request) => {
+
+  const signature = Signature.fromBase58(request.body.signedData.signature);
+  const commenterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
+  const commentKey = request.body.commentKey;
+
+  const comment = await prisma.comments.findUnique({
+    where: {
+      commentKey: commentKey
+    }
+  });
+
+  if(Number(comment!.deletionBlockHeight) === 0) {
+    return 'Comment has not been deleted, so it cannot be restored';
+  }
+
+  const commentRestorations = await prisma.postRestorations.findMany({
+    where: {
+      targetKey: commentKey
+    }
+  })
+
+  commentRestorations.forEach(restoration => {
+    if (restoration?.restorationBlockHeight === 0n) {
+      return 'Comment restoration is already pending';
+    }
+  });
+
+  const commentContentID = CircuitString.fromString(comment!.commentContentID);
+
+  const commentState = new CommentState({
+    isTargetPost: Bool(true),
+    targetKey: Field(request.body.targetKey),
+    commenterAddress: commenterAddress,
+    commentContentID: commentContentID,
+    allCommentsCounter: Field(comment!.allCommentsCounter),
+    userCommentsCounter: Field(comment!.userCommentsCounter),
+    targetCommentsCounter: Field(comment!.targetCommentsCounter),
+    commentBlockHeight: Field(comment!.commentBlockHeight),
+    deletionBlockHeight: Field(comment!.deletionBlockHeight),
+    restorationBlockHeight: Field(comment!.restorationBlockHeight)
+  });
+
+  const isSigned = signature.verify(commenterAddress, [
+    commentState.hash(),
+    fieldToFlagCommentsAsRestored
+  ]);
+
+  // Check that message to delete post is signed
+  if (isSigned) {
+    console.log(request.body.commentKey);
+    const allRestorationsCounter = (await prisma.commentRestorations.count()) + 1;
+    console.log('allCommentsRestorationsCounter: ' + allRestorationsCounter);
+
+    const restorationsForTarget = await prisma.commentRestorations.findMany({
+      where: {
+        targetKey: request.body.commentKey
+      }
+    });
+    const targetRestorationsCounter = restorationsForTarget.length + 1;
+    console.log('targetCommentsRestorationsCounter: ' + targetRestorationsCounter);
+
+    await prisma.commentRestorations.create({
+      data: {
+        targetKey: request.body.commentKey,
+        allRestorationsCounter: allRestorationsCounter,
+        targetRestorationsCounter: targetRestorationsCounter,
+        restorationBlockHeight: 0,
+        restorationSignature: request.body.signedData.signature
+      }
+    });
+
+    return 'Valid Restoration!';
+  } else {
+    return 'Comment restoration message is not signed';
   }
 });
 
@@ -1238,7 +1383,32 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
 
 server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
   try {
-    const { targetKey, howMany, fromBlock, toBlock } = request.query;
+    const { targetKey, howMany, fromBlock, toBlock, commentKey } = request.query;
+
+    if (commentKey !== undefined) {
+      const comment = await prisma.comments.findUnique({
+        where: {
+          commentKey: commentKey
+        }
+      });
+
+      const commenterAddress = PublicKey.fromBase58(comment!.commenterAddress);
+      const commentContentID = CircuitString.fromString(comment!.commentContentID);
+
+      const commentState = new CommentState({
+        isTargetPost: Bool(comment!.isTargetPost),
+        targetKey: Field(comment!.targetKey),
+        commenterAddress: commenterAddress,
+        commentContentID: commentContentID,
+        allCommentsCounter: Field(comment!.allCommentsCounter),
+        userCommentsCounter: Field(comment!.userCommentsCounter),
+        commentBlockHeight: Field(comment!.commentBlockHeight),
+        targetCommentsCounter: Field(comment!.targetCommentsCounter),
+        deletionBlockHeight: Field(comment!.deletionBlockHeight),
+        restorationBlockHeight: Field(comment!.restorationBlockHeight)
+      });
+      return { commentState: JSON.stringify(commentState)};
+    }
 
     const numberOfComments = (await prisma.comments.findMany({
       where: {
@@ -1275,7 +1445,7 @@ server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
 
       let content = '';
       if (comment.deletionBlockHeight === BigInt(0)) {
-        const content = await fs.readFile('./comments/' + comment.commentContentID, 'utf8');
+        content = await fs.readFile('./comments/' + comment.commentContentID, 'utf8');
       }
 
       const commentState = new CommentState({
@@ -1586,7 +1756,8 @@ interface CommentsQuery {
   targetKey: string,
   howMany: number,
   fromBlock: number,
-  toBlock: number
+  toBlock: number,
+  commentKey: string
 }
 
 // ============================================================================
@@ -1608,6 +1779,14 @@ interface SignedCommentDeletion {
 
 interface SignedPostRestoration {
   postKey: string,
+  signedData: SignedData
+}
+
+// ============================================================================
+
+interface SignedCommentRestoration {
+  targetKey: string,
+  commentKey: string,
   signedData: SignedData
 }
 
