@@ -19,11 +19,14 @@ import {
   regenerateReactionsZkAppState,
   regenerateRepostsZkAppState
 } from './utils/state.js';
+import * as dotenv from 'dotenv';
 
 // ============================================================================
 
-// Set up client for PostgreSQL for structured data
+// Load .env
+dotenv.config();
 
+// Set up client for PostgreSQL for structured data
 const prisma = new PrismaClient();
 
 // Load keys, and set up network and smart contract
