@@ -23,15 +23,12 @@ import { SimpleIntervalJob, AsyncTask } from 'toad-scheduler';
 // ============================================================================
 
 // Load .env
-
 dotenv.config();
 
 // Set up client for PostgreSQL for structured data
-
 const prisma = new PrismaClient();
 
 // Set up client for IPFS for unstructured data
-
 const web3storage = await create();
 console.log('Logging-in to web3.storage...');
 await web3storage.login(process.env.W3S_EMAIL as `${string}@${string}`);
@@ -1264,7 +1261,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
           allReactionsCounter: 'desc'
         },
         where: {
-          targetKey: postKey.toString(),
+          targetKey: post.postKey,
           reactionBlockHeight: {
             not: 0
           }
@@ -1304,7 +1301,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
           allCommentsCounter: 'desc'
         },
         where: {
-          targetKey: postKey.toString(),
+          targetKey: post.postKey,
           commentBlockHeight: {
             not: 0
           }
@@ -1555,23 +1552,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
       });
     }
 
-    const repostsResponse: {
-      repostState: string,
-      repostKey: string,
-      repostWitness: string,
-      postState: string,
-      postKey: string,
-      postContentID: string,
-      content: string,
-      postWitness: string,
-      embeddedReactions: EmbeddedReactions[],
-      numberOfReactions: number,
-      numberOfReactionsWitness: string,
-      numberOfComments: number,
-      numberOfCommentsWitness: string,
-      numberOfReposts: number,
-      numberOfRepostsWitness: string
-    }[] = [];
+    const repostsResponse: RepostsResponse[] = [];
 
     for (const repost of reposts ) {
       const targetKey = Field(repost.targetKey);
@@ -1618,7 +1599,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
           allReactionsCounter: 'desc'
         },
         where: {
-          targetKey: postKey.toString(),
+          targetKey: post?.postKey,
           reactionBlockHeight: {
             not: 0
           }
@@ -1631,9 +1612,8 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
 
       for (const reaction of postReactions) {
         const reactorAddress = PublicKey.fromBase58(reaction.reactorAddress);
-        const reactorAddressAsField = Poseidon.hash(reactorAddress.toFields());
         const reactionCodePointAsField = Field(reaction.reactionCodePoint);
-        const reactionKey = Poseidon.hash([postKey, reactorAddressAsField, reactionCodePointAsField]);
+        const reactionKey = Field(reaction.reactionKey);
         const reactionWitness = reactionsMap.getWitness(reactionKey).toJSON();
 
         const reactionState = new ReactionState({
@@ -1656,6 +1636,9 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
       }
 
       const postComments = await prisma.comments.findMany({
+        orderBy: {
+          allCommentsCounter: 'desc'
+        },
         where: {
           targetKey: post!.postKey,
           commentBlockHeight: {
@@ -1665,6 +1648,32 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
       });
       const numberOfComments = postComments.length;
       const numberOfCommentsWitness = targetsCommentsCountersMap.getWitness(postKey).toJSON();
+            const embeddedComments: EmbeddedComments[] = [];
+
+      for (const comment of postComments) {
+        const commenterAddress = PublicKey.fromBase58(comment.commenterAddress);
+        const commentContentID = CircuitString.fromString(comment.commentContentID);
+        const commentKey = Field(comment.commentKey);
+        const commentWitness = commentsMap.getWitness(commentKey).toJSON();
+
+        const commentState = new CommentState({
+          isTargetPost: Bool(comment.isTargetPost),
+          targetKey: postKey,
+          commenterAddress: commenterAddress,
+          commentContentID: commentContentID,
+          allCommentsCounter: Field(comment.allCommentsCounter),
+          userCommentsCounter: Field(comment.userCommentsCounter),
+          targetCommentsCounter: Field(comment.targetCommentsCounter),
+          commentBlockHeight: Field(comment.commentBlockHeight),
+          deletionBlockHeight: Field(comment.deletionBlockHeight),
+          restorationBlockHeight: Field(comment.restorationBlockHeight)
+        });
+
+        embeddedComments.push({
+          commentState: JSON.stringify(commentState),
+          commentWitness: JSON.stringify(commentWitness)
+        })
+      }
 
       const postReposts = await prisma.reposts.findMany({
         where: {
@@ -1689,6 +1698,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
         embeddedReactions: embeddedReactions,
         numberOfReactions: numberOfReactions,
         numberOfReactionsWitness: JSON.stringify(numberOfReactionsWitness),
+        embeddedComments: embeddedComments,
         numberOfComments: numberOfComments,
         numberOfCommentsWitness: JSON.stringify(numberOfCommentsWitness),
         numberOfReposts: numberOfReposts,
@@ -1830,6 +1840,27 @@ type CommentsResponse = {
   commentContentID: string,
   content: string,
   commentWitness: string,
+}
+
+// ============================================================================
+
+type RepostsResponse = {
+  repostState: string,
+  repostKey: string,
+  repostWitness: string,
+  postState: string,
+  postKey: string,
+  postContentID: string,
+  content: string,
+  postWitness: string,
+  embeddedReactions: EmbeddedReactions[],
+  numberOfReactions: number,
+  numberOfReactionsWitness: string,
+  embeddedComments: EmbeddedComments[],
+  numberOfComments: number,
+  numberOfCommentsWitness: string,
+  numberOfReposts: number,
+  numberOfRepostsWitness: string
 }
 
 // ============================================================================
