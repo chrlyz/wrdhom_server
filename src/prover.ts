@@ -2159,7 +2159,7 @@ const commentCIDAsCircuitString = CircuitString.fromString(commentCID.toString()
       targetCommentsCounter: Field(targetCommentsCounter),
       commentBlockHeight: Field(commentBlockHeight),
       deletionBlockHeight: Field(0),
-      restorationBlockHeight: Field(newRestorationBlockHeight)
+      restorationBlockHeight: newRestorationBlockHeight
     });
 
     const usersCommentsCounters = usersCommentsCountersMap.getRoot();
