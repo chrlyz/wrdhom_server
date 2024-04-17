@@ -159,6 +159,7 @@ const provingPostDeletions = 4;
 const provingPostRestorations = 5;
 const provingCommentDeletions = 6;
 const provingCommentRestorations = 7;
+const provingRepostDeletions = 8;
 let provingTurn = 0;
 
 while (true) {
@@ -1358,9 +1359,166 @@ while (true) {
           tries++;
         }
       }
+  } else if (provingTurn === provingRepostDeletions) {
+
+    const pendingRepostDeletions = await prisma.repostDeletions.findMany({
+      take: 1,
+      orderBy: {
+          allDeletionsCounter: 'asc'
+      },
+      where: {
+          deletionBlockHeight: 0
+      }
+      });
+      console.log('pendingRepostDeletions:');
+      console.log(pendingRepostDeletions);
+    
+      startTime = performance.now();
+    
+      const lastBlock = await fetchLastBlock(configReposts.url);
+      const deletionBlockHeight = lastBlock.blockchainLength.toBigint();
+      console.log(deletionBlockHeight);
+
+      const currentAllRepostsCounter = await prisma.reposts.count();
+    
+      const transitionsAndProofs: {
+        transition: RepostsTransition,
+        proof: RepostsProof
+      }[] = [];
+    
+      for (const pDeletion of pendingRepostDeletions) {
+
+        const repost = await prisma.reposts.findUnique({
+          where: {
+            repostKey: pDeletion.targetKey
+          }
+        });
+
+        const parent = await prisma.posts.findUnique({
+          where: {
+            postKey: repost!.targetKey
+          }
+        });
+
+        const result = await proveRepostDeletion(
+          parent,
+          repost!.isTargetPost,
+          repost!.targetKey,
+          repost!.reposterAddress,
+          repost!.allRepostsCounter,
+          repost!.userRepostsCounter,
+          repost!.targetRepostsCounter,
+          repost!.repostBlockHeight,
+          repost!.restorationBlockHeight,
+          Field(repost!.repostKey),
+          pDeletion.deletionSignature,
+          Field(deletionBlockHeight),
+          Field(currentAllRepostsCounter)
+        );
+    
+        transitionsAndProofs.push(result);
+      }
+
+      if (transitionsAndProofs.length !== 0) {
+        await updateRepostsOnChainState(transitionsAndProofs);
+    
+        endTime = performance.now();
+        console.log(`${(endTime - startTime)/1000/60} minutes`);
+    
+        let tries = 0;
+        const maxTries = 50;
+        let allRepostsCounterFetch;
+        let usersRepostsCountersFetch;
+        let targetsRepostsCountersFetch;
+        let repostsFetch;
+        while (tries < maxTries) {
+          console.log('Pause to wait for the transaction to confirm...');
+          await delay(20000);
+    
+          allRepostsCounterFetch = await repostsContract.allRepostsCounter.fetch();
+          console.log('allRepostsCounterFetch: ' + allRepostsCounterFetch?.toString());
+          usersRepostsCountersFetch = await repostsContract.usersRepostsCounters.fetch();
+          console.log('usersRepostsCountersFetch: ' + usersRepostsCountersFetch?.toString());
+          targetsRepostsCountersFetch = await repostsContract.targetsRepostsCounters.fetch();
+          console.log('targetsRepostsCountersFetch: ' + targetsRepostsCountersFetch?.toString());
+          repostsFetch = await repostsContract.reposts.fetch();
+          console.log('repostsFetch: ' + repostsFetch?.toString());
+    
+          console.log(Field(repostsContext.totalNumberOfReposts).toString());
+          console.log(usersRepostsCountersMap.getRoot().toString());
+          console.log(targetsRepostsCountersMap.getRoot().toString());
+          console.log(repostsMap.getRoot().toString());
+    
+          console.log(allRepostsCounterFetch?.equals(Field(repostsContext.totalNumberOfReposts)).toBoolean());
+          console.log(usersRepostsCountersFetch?.equals(usersRepostsCountersMap.getRoot()).toBoolean());
+          console.log(targetsRepostsCountersFetch?.equals(targetsRepostsCountersMap.getRoot()).toBoolean());
+          console.log(repostsFetch?.equals(repostsMap.getRoot()).toBoolean());
+    
+          if (allRepostsCounterFetch?.equals(Field(repostsContext.totalNumberOfReposts)).toBoolean()
+          && usersRepostsCountersFetch?.equals(usersRepostsCountersMap.getRoot()).toBoolean()
+          && targetsRepostsCountersFetch?.equals(targetsRepostsCountersMap.getRoot()).toBoolean()
+          && repostsFetch?.equals(repostsMap.getRoot()).toBoolean()) {
+            for (const pDeletion of pendingRepostDeletions) {
+              await prisma.reposts.update({
+                  where: {
+                    repostKey: pDeletion.targetKey
+                  },
+                  data: {
+                    deletionBlockHeight: deletionBlockHeight
+                  }
+              });
+
+              await prisma.repostDeletions.update({
+                where: {
+                  allDeletionsCounter: pDeletion.allDeletionsCounter
+                },
+                data: {
+                  deletionBlockHeight: deletionBlockHeight
+                }
+              });
+            }
+            tries = maxTries;
+          }
+          // Reset initial state if transaction appears to have failed
+          if (tries === maxTries - 1) {
+
+            for (const pDeletion of pendingRepostDeletions) {
+
+              const target = await prisma.reposts.findUnique({
+                where: {
+                  repostKey: pDeletion.targetKey
+                }
+              });
+
+              const reposterAddress = PublicKey.fromBase58(target!.reposterAddress);
+              const reposterAddressAsField = Poseidon.hash(reposterAddress.toFields());
+        
+              const restoredTargetState = new RepostState({
+                isTargetPost: Bool(target!.isTargetPost),
+                targetKey: Field(target!.targetKey),
+                reposterAddress: reposterAddress,
+                allRepostsCounter: Field(target!.allRepostsCounter),
+                userRepostsCounter: Field(target!.userRepostsCounter),
+                repostBlockHeight: Field(target!.repostBlockHeight),
+                targetRepostsCounter: Field(target!.targetRepostsCounter),
+                deletionBlockHeight: Field(target!.deletionBlockHeight),
+                restorationBlockHeight: Field(target!.restorationBlockHeight)
+              });
+
+              console.log('Initial repostsMap root: ' + repostsMap.getRoot().toString());
+              repostsMap.set(
+                  Poseidon.hash([Field(target!.targetKey), reposterAddressAsField]),
+                  restoredTargetState.hash()
+              );
+              console.log('Latest repostsMap root: ' + repostsMap.getRoot().toString());
+            }
+          }
+          tries++;
+        }
+      }
   }
   provingTurn++;
-  if (provingTurn > provingCommentRestorations) {
+  if (provingTurn > provingRepostDeletions) {
     provingTurn = 0;
     console.log('Pause to wait for new actions before running loop again...');
     await delay(10000);
@@ -2218,6 +2376,107 @@ const commentCIDAsCircuitString = CircuitString.fromString(commentCID.toString()
     return {transition: transition, proof: proof};
 }
   
+// ============================================================================
+
+async function proveRepostDeletion(parent: {
+  postKey: string;
+  posterAddress: string;
+  postContentID: string;
+  allPostsCounter: bigint;
+  userPostsCounter: bigint;
+  postBlockHeight: bigint;
+  deletionBlockHeight: bigint;
+  restorationBlockHeight: bigint;
+  postSignature: string;
+} | null,
+isTargetPost: boolean, targetKey: string, reposterAddressBase58: string, allRepostsCounter: bigint,
+userRepostsCounter: bigint, targetRepostsCounter: bigint, repostBlockHeight: bigint,
+restorationBlockHeight: bigint, repostKey: Field, signatureBase58: string,
+deletionBlockHeight: Field, currentAllRepostsCounter: Field) {
+
+const signature = Signature.fromBase58(signatureBase58);
+const reposterAddress = PublicKey.fromBase58(reposterAddressBase58);
+
+    const initialRepostState = new RepostState({
+      isTargetPost: Bool(isTargetPost),
+      targetKey: Field(targetKey),
+      reposterAddress: reposterAddress,
+      allRepostsCounter: Field(allRepostsCounter),
+      userRepostsCounter: Field(userRepostsCounter),
+      targetRepostsCounter: Field(targetRepostsCounter),
+      repostBlockHeight: Field(repostBlockHeight),
+      deletionBlockHeight: Field(0),
+      restorationBlockHeight: Field(restorationBlockHeight)
+    });
+
+    const latestRepostsState = new RepostState({
+      isTargetPost: Bool(isTargetPost),
+      targetKey: Field(targetKey),
+      reposterAddress: reposterAddress,
+      allRepostsCounter: Field(allRepostsCounter),
+      userRepostsCounter: Field(userRepostsCounter),
+      targetRepostsCounter: Field(targetRepostsCounter),
+      repostBlockHeight: Field(repostBlockHeight),
+      deletionBlockHeight: deletionBlockHeight,
+      restorationBlockHeight: Field(restorationBlockHeight)
+    });
+
+    const usersRepostsCounters = usersRepostsCountersMap.getRoot();
+    const targetsRepostsCounters = targetsRepostsCountersMap.getRoot();
+
+    const initialReposts = repostsMap.getRoot();
+    const repostWitness = repostsMap.getWitness(repostKey);
+    repostsMap.set(repostKey, latestRepostsState.hash());
+    const latestReposts = repostsMap.getRoot();
+
+    const currentPosts = postsMap.getRoot();
+    const parentState = new PostState({
+      posterAddress: PublicKey.fromBase58(parent!.posterAddress),
+      postContentID: CircuitString.fromString(parent!.postContentID),
+      allPostsCounter: Field(parent!.allPostsCounter),
+      userPostsCounter: Field(parent!.userPostsCounter),
+      postBlockHeight: Field(parent!.postBlockHeight),
+      deletionBlockHeight: Field(parent!.deletionBlockHeight),
+      restorationBlockHeight: Field(parent!.restorationBlockHeight)
+    });
+    const parentWitness = postsMap.getWitness(Field(parent!.postKey));
+
+    const transition = RepostsTransition.createRepostDeletionTransition(
+      signature,
+      currentPosts,
+      parentState,
+      parentWitness,
+      currentAllRepostsCounter,
+      usersRepostsCounters,
+      targetsRepostsCounters,
+      initialReposts,
+      latestReposts,
+      initialRepostState,
+      repostWitness,
+      deletionBlockHeight
+    );
+    console.log('Transition created');
+    
+    const proof = await Reposts.proveRepostDeletionTransition(
+      transition,
+      signature,
+      currentPosts,
+      parentState,
+      parentWitness,
+      currentAllRepostsCounter,
+      usersRepostsCounters,
+      targetsRepostsCounters,
+      initialReposts,
+      latestReposts,
+      initialRepostState,
+      repostWitness,
+      deletionBlockHeight
+    );
+    console.log('Proof created');
+
+    return {transition: transition, proof: proof};
+}
+
 // ============================================================================
 
   async function delay(ms: number) {
