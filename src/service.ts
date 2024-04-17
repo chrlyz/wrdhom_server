@@ -14,7 +14,8 @@ import { CommentState, PostState, ReactionState, fieldToFlagTargetAsReposted,
   fieldToFlagPostsAsDeleted,
   fieldToFlagPostsAsRestored,
   fieldToFlagCommentsAsDeleted,
-  fieldToFlagCommentsAsRestored
+  fieldToFlagCommentsAsRestored,
+  fieldToFlagRepostsAsDeleted
 } from 'wrdhom';
 import fs from 'fs/promises';
 import { fastifySchedule } from '@fastify/schedule';
@@ -982,6 +983,86 @@ server.post<{Body: SignedCommentDeletion}>('/comments/delete', async (request) =
 
 // ============================================================================
 
+server.post<{Body: SignedRepostDeletion}>('/reposts/delete', async (request) => {
+
+  const signature = Signature.fromBase58(request.body.signedData.signature);
+  const reposterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
+  const targetKey = request.body.targetKey;
+  const repostKey = request.body.repostKey;
+
+  const repost = await prisma.reposts.findUnique({
+    where: {
+      repostKey: repostKey
+    }
+  });
+
+  const repostDeletions = await prisma.repostDeletions.findMany({
+    where: {
+      targetKey: repostKey
+    }
+  });
+
+  repostDeletions.forEach(deletion => {
+    if (deletion?.deletionBlockHeight !== 0n) {
+      return 'Repost is already deleted';
+    }
+    
+    if (deletion?.deletionBlockHeight === 0n) {
+      return 'Repost deletion is already pending';
+    }
+  });
+
+  const repostState = new RepostState({
+    isTargetPost: Bool(repost!.isTargetPost),
+    targetKey: Field(targetKey),
+    reposterAddress: reposterAddress,
+    allRepostsCounter: Field(repost!.allRepostsCounter),
+    userRepostsCounter: Field(repost!.userRepostsCounter),
+    targetRepostsCounter: Field(repost!.targetRepostsCounter),
+    repostBlockHeight: Field(repost!.repostBlockHeight),
+    deletionBlockHeight: Field(repost!.deletionBlockHeight),
+    restorationBlockHeight: Field(repost!.restorationBlockHeight)
+  });
+
+  const repostStateHash = repostState.hash();
+
+  const isSigned = signature.verify(reposterAddress, [
+    repostStateHash,
+    fieldToFlagRepostsAsDeleted
+  ]);
+
+  // Check that message to delete post is signed
+  if (isSigned) {
+    console.log(repostKey);
+    const allDeletionsCounter = (await prisma.repostDeletions.count()) + 1;
+    console.log('allRepostDeletionsCounter: ' + allDeletionsCounter);
+
+    const deletionsForTarget = await prisma.repostDeletions.findMany({
+      where: {
+        targetKey: repostKey
+      }
+    });
+    const targetDeletionsCounter = deletionsForTarget.length + 1;
+    console.log('targetRepostDeletionsCounter: ' + targetDeletionsCounter);
+
+    await prisma.repostDeletions.create({
+      data: {
+        targetKey: repostKey,
+        allDeletionsCounter: allDeletionsCounter,
+        targetDeletionsCounter: targetDeletionsCounter,
+        deletionBlockHeight: 0,
+        deletionSignature: request.body.signedData.signature
+      }
+    });
+
+    return 'Valid Repost Deletion!';
+  } else {
+    return 'Repost deletion message is not signed';
+  }
+});
+
+// ============================================================================
+
 server.post<{Body: SignedPostRestoration}>('/posts/restore', async (request) => {
 
   const signature = Signature.fromBase58(request.body.signedData.signature);
@@ -1782,6 +1863,14 @@ interface SignedPostDeletion {
 interface SignedCommentDeletion {
   targetKey: string,
   commentKey: string,
+  signedData: SignedData
+}
+
+// ============================================================================
+
+interface SignedRepostDeletion {
+  targetKey: string,
+  repostKey: string,
   signedData: SignedData
 }
 
