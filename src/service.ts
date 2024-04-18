@@ -1418,6 +1418,9 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       }
 
       const postReposts = await prisma.reposts.findMany({
+        orderBy: {
+          allRepostsCounter: 'desc'
+        },
         where: {
           targetKey: post.postKey,
           repostBlockHeight: {
@@ -1427,6 +1430,30 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       });
       const numberOfReposts = postReposts.length;
       const numberOfRepostsWitness = targetsRepostsCountersMap.getWitness(postKey).toJSON();
+      const embeddedReposts: EmbeddedReposts[] = [];
+
+      for (const repost of postReposts) {
+        const reposterAddress = PublicKey.fromBase58(repost.reposterAddress);
+        const repostKey = Field(repost.repostKey);
+        const repostWitness = repostsMap.getWitness(repostKey).toJSON();
+
+        const repostState = new RepostState({
+          isTargetPost: Bool(repost.isTargetPost),
+          targetKey: postKey,
+          reposterAddress: reposterAddress,
+          allRepostsCounter: Field(repost.allRepostsCounter),
+          userRepostsCounter: Field(repost.userRepostsCounter),
+          targetRepostsCounter: Field(repost.targetRepostsCounter),
+          repostBlockHeight: Field(repost.repostBlockHeight),
+          deletionBlockHeight: Field(repost.deletionBlockHeight),
+          restorationBlockHeight: Field(repost.restorationBlockHeight)
+        });
+
+        embeddedReposts.push({
+          repostState: JSON.stringify(repostState),
+          repostWitness: JSON.stringify(repostWitness)
+        })
+      }
 
       postsResponse.push({
         postState: JSON.stringify(postState),
@@ -1440,6 +1467,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         embeddedComments: embeddedComments,
         numberOfComments: numberOfComments,
         numberOfCommentsWitness: JSON.stringify(numberOfCommentsWitness),
+        embeddedReposts: embeddedReposts,
         numberOfReposts: numberOfReposts,
         numberOfRepostsWitness: JSON.stringify(numberOfRepostsWitness)
       });
@@ -1761,6 +1789,9 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
       }
 
       const postReposts = await prisma.reposts.findMany({
+        orderBy: {
+          allRepostsCounter: 'desc'
+        },
         where: {
           targetKey: post!.postKey,
           repostBlockHeight: {
@@ -1770,6 +1801,30 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
       });
       const numberOfReposts = postReposts.length;
       const numberOfRepostsWitness = targetsRepostsCountersMap.getWitness(postKey).toJSON();
+            const embeddedReposts: EmbeddedReposts[] = [];
+
+      for (const repost of postReposts) {
+        const reposterAddress = PublicKey.fromBase58(repost.reposterAddress);
+        const repostKey = Field(repost.repostKey);
+        const repostWitness = repostsMap.getWitness(repostKey).toJSON();
+
+        const repostState = new RepostState({
+          isTargetPost: Bool(repost.isTargetPost),
+          targetKey: postKey,
+          reposterAddress: reposterAddress,
+          allRepostsCounter: Field(repost.allRepostsCounter),
+          userRepostsCounter: Field(repost.userRepostsCounter),
+          targetRepostsCounter: Field(repost.targetRepostsCounter),
+          repostBlockHeight: Field(repost.repostBlockHeight),
+          deletionBlockHeight: Field(repost.deletionBlockHeight),
+          restorationBlockHeight: Field(repost.restorationBlockHeight)
+        });
+
+        embeddedReposts.push({
+          repostState: JSON.stringify(repostState),
+          repostWitness: JSON.stringify(repostWitness)
+        })
+      }
 
       repostsResponse.push({
         repostState: JSON.stringify(repostState),
@@ -1786,6 +1841,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
         embeddedComments: embeddedComments,
         numberOfComments: numberOfComments,
         numberOfCommentsWitness: JSON.stringify(numberOfCommentsWitness),
+        embeddedReposts: embeddedReposts,
         numberOfReposts: numberOfReposts,
         numberOfRepostsWitness: JSON.stringify(numberOfRepostsWitness)
       })
@@ -1909,6 +1965,13 @@ type EmbeddedComments = {
 
 // ============================================================================
 
+type EmbeddedReposts = {
+  repostState: string,
+  repostWitness: string
+}
+
+// ============================================================================
+
 type PostsResponse = {
   postState: string,
   postKey: string,
@@ -1921,6 +1984,7 @@ type PostsResponse = {
   embeddedComments: EmbeddedComments[],
   numberOfComments: number,
   numberOfCommentsWitness: string,
+  embeddedReposts: EmbeddedReposts[],
   numberOfReposts: number,
   numberOfRepostsWitness: string
 }
@@ -1952,6 +2016,7 @@ type RepostsResponse = {
   embeddedComments: EmbeddedComments[],
   numberOfComments: number,
   numberOfCommentsWitness: string,
+  embeddedReposts: EmbeddedReposts[],
   numberOfReposts: number,
   numberOfRepostsWitness: string
 }
