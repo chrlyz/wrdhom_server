@@ -137,6 +137,16 @@ const commentRestorations = await prisma.commentRestorations.findMany({
 let totalNumberOfCommentRestorations = commentRestorations.length;
 console.log('totalNumberOfCommentRestorations: ' + totalNumberOfCommentRestorations);
 
+const repostDeletions = await prisma.repostDeletions.findMany({
+  where: {
+    deletionBlockHeight: {
+      gt: 0
+    }
+  }
+});
+let totalNumberOfRepostDeletions = repostDeletions.length;
+console.log('totalNumberOfRepostDeletions: ' + totalNumberOfRepostDeletions);
+
 // Get content and keep it locally for faster reponses
 
 try {
@@ -514,6 +524,42 @@ const syncStateTask = new AsyncTask(
       const commentKey = Field(target!.commentKey);
       commentsMap.set(commentKey, commentState.hash());
       totalNumberOfCommentRestorations += 1;
+    }
+
+    const pendingRepostDeletions = await prisma.repostDeletions.findMany({
+      where: {
+        allDeletionsCounter: {
+          gt: totalNumberOfRepostDeletions,
+        },
+        deletionBlockHeight: {
+          gt: 0
+        }
+      }
+    });
+
+    for (const pRepostDeletion of pendingRepostDeletions) {
+      const target = await prisma.reposts.findUnique({
+        where: {
+          repostKey: pRepostDeletion.targetKey
+        }
+      });
+
+      console.log(pRepostDeletion);
+      const repostState = new RepostState({
+        isTargetPost: Bool(target!.isTargetPost),
+        targetKey: Field(target!.targetKey),
+        reposterAddress: PublicKey.fromBase58(target!.reposterAddress),
+        allRepostsCounter: Field(target!.allRepostsCounter),
+        userRepostsCounter: Field(target!.userRepostsCounter),
+        targetRepostsCounter: Field(target!.targetRepostsCounter),
+        repostBlockHeight: Field(target!.repostBlockHeight),
+        deletionBlockHeight: Field(target!.deletionBlockHeight),
+        restorationBlockHeight: Field(target!.restorationBlockHeight)
+      });
+
+      const repostKey = Field(target!.repostKey);
+      repostsMap.set(repostKey, repostState.hash());
+      totalNumberOfRepostDeletions += 1;
     }
   },
   (e) => {console.error(e)}
