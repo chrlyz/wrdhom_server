@@ -586,8 +586,6 @@ server.listen({ port: 3001 }, (err, address) => {
 
 server.post<{Body: SignedPost}>('/posts', async (request) => {
 
-  console.log(request.body.signedData);
-
   // If post already exists but it was previously deleted, ask user if they want to restore it
   const posterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
   const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
@@ -600,10 +598,14 @@ server.post<{Body: SignedPost}>('/posts', async (request) => {
     }
   });
 
+  if (post !== null && post?.deletionBlockHeight === 0n) {
+    return {message: 'Post already exists'}
+  }
+
   if (post !== null && Number(post?.deletionBlockHeight) !== 0) {
     return {
       postKey: postKey.toString(),
-      option: 'Restore?'
+      message: 'Restore?'
     }
   }
 
@@ -751,10 +753,14 @@ server.post<{Body: SignedComment}>('/comments', async (request) => {
     }
   });
 
+  if (comment !== null && comment?.deletionBlockHeight === 0n) {
+    return {message: 'Comment already exists'}
+  }
+
   if (comment !== null && Number(comment?.deletionBlockHeight) !== 0) {
     return {
       commentKey: commentKey.toString(),
-      option: 'Restore?'
+      message: 'Restore?'
     }
   }
 
@@ -814,6 +820,7 @@ server.post<{Body: SignedComment}>('/comments', async (request) => {
 // ============================================================================
 
 server.post<{Body: SignedData}>('/reposts', async (request) => {
+  try {
   const post = await prisma.posts.findUnique({
     where: {
       postKey: request.body.data[0],
@@ -843,10 +850,14 @@ server.post<{Body: SignedData}>('/reposts', async (request) => {
     }
   });
 
-  if (repost !== null && Number(repost?.deletionBlockHeight) !== 0) {
+  if (repost !== null && repost?.deletionBlockHeight === 0n) {
+    return {message: 'Repost already exists'}
+  }
+
+  if (repost !== null && repost?.deletionBlockHeight !== 0n) {
     return {
       repostKey: repostKey.toString(),
-      option: 'Restore?'
+      message: 'Restore?'
     }
   }
 
@@ -877,6 +888,9 @@ server.post<{Body: SignedData}>('/reposts', async (request) => {
   } else {
     return 'Repost message is not signed';
   }
+} catch (e) {
+  console.log(e)
+}
 });
 
 // ============================================================================
