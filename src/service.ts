@@ -16,7 +16,8 @@ import { CommentState, PostState, ReactionState, fieldToFlagTargetAsReposted,
   fieldToFlagCommentsAsDeleted,
   fieldToFlagCommentsAsRestored,
   fieldToFlagRepostsAsDeleted,
-  fieldToFlagRepostsAsRestored
+  fieldToFlagRepostsAsRestored,
+  fieldToFlagReactionsAsDeleted
 } from 'wrdhom';
 import fs from 'fs/promises';
 import { fastifySchedule } from '@fastify/schedule';
@@ -1099,6 +1100,87 @@ server.post<{Body: SignedCommentDeletion}>('/comments/delete', async (request) =
 
 // ============================================================================
 
+server.post<{Body: SignedReactionDeletion}>('/reactions/delete', async (request) => {
+
+  const signature = Signature.fromBase58(request.body.signedData.signature);
+  const reactorAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
+  const reactorAddressAsField = Poseidon.hash(reactorAddress.toFields());
+  const initialReactionState = ReactionState.fromJSON(JSON.parse(request.body.reactionState));
+  const reactionKey = Poseidon.hash([initialReactionState.targetKey, reactorAddressAsField, initialReactionState.reactionCodePoint]);
+  const reactionKeyAsString = reactionKey.toString();
+
+  const reaction = await prisma.reactions.findUnique({
+    where: {
+      reactionKey: reactionKeyAsString
+    }
+  });
+
+  if (reaction !== null && reaction?.deletionBlockHeight !== 0n) {
+    return 'Reaction is already deleted';
+  }
+
+  const pendingDeletion = await prisma.reactionDeletions.findFirst({
+    where: {
+      targetKey: reactionKeyAsString
+    }
+  })
+  
+  if (pendingDeletion !== null && pendingDeletion?.deletionBlockHeight === 0n) {
+    return 'Reaction deletion is already pending';
+  }
+
+  const reactionState = new ReactionState({
+    isTargetPost: Bool(reaction!.isTargetPost),
+    targetKey: Field(reaction!.targetKey),
+    reactorAddress: reactorAddress,
+    reactionCodePoint: Field(reaction!.reactionCodePoint),
+    allReactionsCounter: Field(reaction!.allReactionsCounter),
+    userReactionsCounter: Field(reaction!.userReactionsCounter),
+    targetReactionsCounter: Field(reaction!.targetReactionsCounter),
+    reactionBlockHeight: Field(reaction!.reactionBlockHeight),
+    deletionBlockHeight: Field(reaction!.deletionBlockHeight),
+    restorationBlockHeight: Field(reaction!.restorationBlockHeight)
+  });
+
+  const reactionStateHash = reactionState.hash();
+
+  const isSigned = signature.verify(reactorAddress, [
+    reactionStateHash,
+    fieldToFlagReactionsAsDeleted
+  ]);
+
+  // Check that message to delete reaction is signed
+  if (isSigned) {
+    console.log(reactionKey);
+    const allDeletionsCounter = (await prisma.reactionDeletions.count()) + 1;
+    console.log('allReactionDeletionsCounter: ' + allDeletionsCounter);
+
+    const deletionsForTarget = await prisma.reactionDeletions.findMany({
+      where: {
+        targetKey: reactionKeyAsString
+      }
+    });
+    const targetDeletionsCounter = deletionsForTarget.length + 1;
+    console.log('targetReactionDeletionsCounter: ' + targetDeletionsCounter);
+
+    await prisma.reactionDeletions.create({
+      data: {
+        targetKey: reactionKeyAsString,
+        allDeletionsCounter: allDeletionsCounter,
+        targetDeletionsCounter: targetDeletionsCounter,
+        deletionBlockHeight: 0,
+        deletionSignature: request.body.signedData.signature
+      }
+    });
+
+    return 'Valid Reaction Deletion!';
+  } else {
+    return 'Reaction deletion message is not signed';
+  }
+});
+
+// ============================================================================
+
 server.post<{Body: SignedRepostDeletion}>('/reposts/delete', async (request) => {
 
   const signature = Signature.fromBase58(request.body.signedData.signature);
@@ -2135,6 +2217,13 @@ interface SignedPostDeletion {
 interface SignedCommentDeletion {
   targetKey: string,
   commentKey: string,
+  signedData: SignedData
+}
+
+// ============================================================================
+
+interface SignedReactionDeletion {
+  reactionState: string,
   signedData: SignedData
 }
 
