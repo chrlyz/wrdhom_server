@@ -148,6 +148,16 @@ const repostDeletions = await prisma.repostDeletions.findMany({
 let totalNumberOfRepostDeletions = repostDeletions.length;
 console.log('totalNumberOfRepostDeletions: ' + totalNumberOfRepostDeletions);
 
+const repostRestorations = await prisma.repostRestorations.findMany({
+  where: {
+    restorationBlockHeight: {
+      gt: 0
+    }
+  }
+});
+let totalNumberOfRepostRestorations = repostRestorations.length;
+console.log('totalNumberOfRepostRestorations: ' + totalNumberOfRepostRestorations);
+
 // Get content and keep it locally for faster reponses
 
 try {
@@ -562,6 +572,42 @@ const syncStateTask = new AsyncTask(
       repostsMap.set(repostKey, repostState.hash());
       totalNumberOfRepostDeletions += 1;
     }
+
+    const pendingRepostRestorations = await prisma.repostRestorations.findMany({
+      where: {
+        allRestorationsCounter: {
+          gt: totalNumberOfRepostRestorations,
+        },
+        restorationBlockHeight: {
+          gt: 0
+        }
+      }
+    });
+
+    for (const pRepostRestoration of pendingRepostRestorations) {
+      const target = await prisma.reposts.findUnique({
+        where: {
+          repostKey: pRepostRestoration.targetKey
+        }
+      });
+
+      console.log(pRepostRestoration);
+      const repostState = new RepostState({
+        isTargetPost: Bool(target!.isTargetPost),
+        targetKey: Field(target!.targetKey),
+        reposterAddress: PublicKey.fromBase58(target!.reposterAddress),
+        allRepostsCounter: Field(target!.allRepostsCounter),
+        userRepostsCounter: Field(target!.userRepostsCounter),
+        targetRepostsCounter: Field(target!.targetRepostsCounter),
+        repostBlockHeight: Field(target!.repostBlockHeight),
+        deletionBlockHeight: Field(target!.deletionBlockHeight),
+        restorationBlockHeight: Field(target!.restorationBlockHeight)
+      });
+
+      const repostKey = Field(target!.repostKey);
+      repostsMap.set(repostKey, repostState.hash());
+      totalNumberOfRepostRestorations += 1;
+    }
   },
   (e) => {console.error(e)}
 )
@@ -907,15 +953,15 @@ server.post<{Body: SignedPostDeletion}>('/posts/delete', async (request) => {
     }
   });
 
+  if (post !== null && post?.deletionBlockHeight !== 0n) {
+    return 'Post is already deleted';
+  }
+
   const pendingDeletion = await prisma.postDeletions.findFirst({
     where: {
       targetKey: postKey
     }
   });
-
-  if (pendingDeletion !== null && pendingDeletion?.deletionBlockHeight !== 0n) {
-    return 'Post is already deleted';
-  }
   
   if (pendingDeletion !== null && pendingDeletion?.deletionBlockHeight === 0n) {
     return 'Post deletion is already pending';
@@ -985,15 +1031,15 @@ server.post<{Body: SignedCommentDeletion}>('/comments/delete', async (request) =
     }
   });
 
+  if (comment !== null && comment?.deletionBlockHeight !== 0n) {
+    return 'Comment is already deleted';
+  }
+
   const pendingDeletion = await prisma.commentDeletions.findFirst({
     where: {
       targetKey: commentKey
     }
   })
-
-  if (pendingDeletion !== null && pendingDeletion?.deletionBlockHeight !== 0n) {
-    return 'Comment is already deleted';
-  }
   
   if (pendingDeletion !== null && pendingDeletion?.deletionBlockHeight === 0n) {
     return 'Comment deletion is already pending';
@@ -1066,15 +1112,15 @@ server.post<{Body: SignedRepostDeletion}>('/reposts/delete', async (request) => 
     }
   });
 
+  if (repost !== null && repost?.deletionBlockHeight !== 0n) {
+    return 'Repost is already deleted';
+  }
+
   const pendingDeletion = await prisma.repostDeletions.findFirst({
     where: {
       targetKey: repostKey
     }
   });
-
-  if (pendingDeletion !== null && pendingDeletion?.deletionBlockHeight !== 0n) {
-    return 'Repost is already deleted';
-  }
   
   if (pendingDeletion !== null && pendingDeletion?.deletionBlockHeight === 0n) {
     return 'Repost deletion is already pending';
