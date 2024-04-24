@@ -161,6 +161,7 @@ const provingCommentDeletions = 6;
 const provingCommentRestorations = 7;
 const provingRepostDeletions = 8;
 const provingRepostRestorations = 9;
+const provingReactionDeletions = 10;
 let provingTurn = 0;
 
 while (true) {
@@ -1676,9 +1677,169 @@ while (true) {
           tries++;
         }
       }
+  } else if (provingTurn === provingReactionDeletions) {
+
+    const pendingReactionDeletions = await prisma.reactionDeletions.findMany({
+      take: 1,
+      orderBy: {
+          allDeletionsCounter: 'asc'
+      },
+      where: {
+          deletionBlockHeight: 0
+      }
+      });
+      console.log('pendingReactionDeletions:');
+      console.log(pendingReactionDeletions);
+    
+      startTime = performance.now();
+    
+      const lastBlock = await fetchLastBlock(configReactions.url);
+      const deletionBlockHeight = lastBlock.blockchainLength.toBigint();
+      console.log(deletionBlockHeight);
+
+      const currentAllReactionsCounter = await prisma.reactions.count();
+    
+      const transitionsAndProofs: {
+        transition: ReactionsTransition,
+        proof: ReactionsProof
+      }[] = [];
+    
+      for (const pDeletion of pendingReactionDeletions) {
+
+        const reaction = await prisma.reactions.findUnique({
+          where: {
+            reactionKey: pDeletion.targetKey
+          }
+        });
+
+        const parent = await prisma.posts.findUnique({
+          where: {
+            postKey: reaction!.targetKey
+          }
+        });
+
+        const result = await proveReactionDeletion(
+          parent,
+          reaction!.isTargetPost,
+          reaction!.targetKey,
+          reaction!.reactorAddress,
+          reaction!.reactionCodePoint,
+          reaction!.allReactionsCounter,
+          reaction!.userReactionsCounter,
+          reaction!.targetReactionsCounter,
+          reaction!.reactionBlockHeight,
+          reaction!.restorationBlockHeight,
+          Field(reaction!.reactionKey),
+          pDeletion.deletionSignature,
+          Field(deletionBlockHeight),
+          Field(currentAllReactionsCounter)
+        );
+    
+        transitionsAndProofs.push(result);
+      }
+
+      if (transitionsAndProofs.length !== 0) {
+        await updateReactionsOnChainState(transitionsAndProofs);
+    
+        endTime = performance.now();
+        console.log(`${(endTime - startTime)/1000/60} minutes`);
+    
+        let tries = 0;
+        const maxTries = 50;
+        let allReactionsCounterFetch;
+        let usersReactionsCountersFetch;
+        let targetsReactionsCountersFetch;
+        let reactionsFetch;
+        while (tries < maxTries) {
+          console.log('Pause to wait for the transaction to confirm...');
+          await delay(20000);
+    
+          allReactionsCounterFetch = await reactionsContract.allReactionsCounter.fetch();
+          console.log('allReactionsCounterFetch: ' + allReactionsCounterFetch?.toString());
+          usersReactionsCountersFetch = await reactionsContract.usersReactionsCounters.fetch();
+          console.log('usersReactionsCountersFetch: ' + usersReactionsCountersFetch?.toString());
+          targetsReactionsCountersFetch = await reactionsContract.targetsReactionsCounters.fetch();
+          console.log('targetsReactionsCountersFetch: ' + targetsReactionsCountersFetch?.toString());
+          reactionsFetch = await reactionsContract.reactions.fetch();
+          console.log('reactionsFetch: ' + reactionsFetch?.toString());
+    
+          console.log(Field(reactionsContext.totalNumberOfReactions).toString());
+          console.log(usersReactionsCountersMap.getRoot().toString());
+          console.log(targetsReactionsCountersMap.getRoot().toString());
+          console.log(reactionsMap.getRoot().toString());
+    
+          console.log(allReactionsCounterFetch?.equals(Field(reactionsContext.totalNumberOfReactions)).toBoolean());
+          console.log(usersReactionsCountersFetch?.equals(usersReactionsCountersMap.getRoot()).toBoolean());
+          console.log(targetsReactionsCountersFetch?.equals(targetsReactionsCountersMap.getRoot()).toBoolean());
+          console.log(reactionsFetch?.equals(reactionsMap.getRoot()).toBoolean());
+    
+          if (allReactionsCounterFetch?.equals(Field(reactionsContext.totalNumberOfReactions)).toBoolean()
+          && usersReactionsCountersFetch?.equals(usersReactionsCountersMap.getRoot()).toBoolean()
+          && targetsReactionsCountersFetch?.equals(targetsReactionsCountersMap.getRoot()).toBoolean()
+          && reactionsFetch?.equals(reactionsMap.getRoot()).toBoolean()) {
+            for (const pDeletion of pendingReactionDeletions) {
+              await prisma.reactions.update({
+                  where: {
+                    reactionKey: pDeletion.targetKey
+                  },
+                  data: {
+                    deletionBlockHeight: deletionBlockHeight
+                  }
+              });
+
+              await prisma.reactionDeletions.update({
+                where: {
+                  allDeletionsCounter: pDeletion.allDeletionsCounter
+                },
+                data: {
+                  deletionBlockHeight: deletionBlockHeight
+                }
+              });
+            }
+            tries = maxTries;
+          }
+          // Reset initial state if transaction appears to have failed
+          if (tries === maxTries - 1) {
+
+            for (const pDeletion of pendingReactionDeletions) {
+
+              const target = await prisma.reactions.findUnique({
+                where: {
+                  reactionKey: pDeletion.targetKey
+                }
+              });
+
+              const reactorAddress = PublicKey.fromBase58(target!.reactorAddress);
+              const reactorAddressAsField = Poseidon.hash(reactorAddress.toFields());
+              const reactionCodePointAsField = Field(target!.reactionCodePoint);
+        
+              const restoredTargetState = new ReactionState({
+                isTargetPost: Bool(target!.isTargetPost),
+                targetKey: Field(target!.targetKey),
+                reactorAddress: reactorAddress,
+                reactionCodePoint: reactionCodePointAsField,
+                allReactionsCounter: Field(target!.allReactionsCounter),
+                userReactionsCounter: Field(target!.userReactionsCounter),
+                reactionBlockHeight: Field(target!.reactionBlockHeight),
+                targetReactionsCounter: Field(target!.targetReactionsCounter),
+                deletionBlockHeight: Field(target!.deletionBlockHeight),
+                restorationBlockHeight: Field(target!.restorationBlockHeight)
+              });
+
+              console.log('Initial reactionsMap root: ' + reactionsMap.getRoot().toString());
+              reactionsMap.set(
+                  Poseidon.hash([Field(target!.targetKey), reactorAddressAsField, reactionCodePointAsField]),
+                  restoredTargetState.hash()
+              );
+              console.log('Latest reactionsMap root: ' + reactionsMap.getRoot().toString());
+            }
+          }
+          tries++;
+        }
+      }
   }
   provingTurn++;
-  if (provingTurn > provingRepostRestorations) {
+  if (provingTurn > provingReactionDeletions) {
     provingTurn = 0;
     console.log('Pause to wait for new actions before running loop again...');
     await delay(10000);
@@ -2732,6 +2893,110 @@ const reposterAddress = PublicKey.fromBase58(reposterAddressBase58);
       initialRepostState,
       repostWitness,
       newRestorationBlockHeight
+    );
+    console.log('Proof created');
+
+    return {transition: transition, proof: proof};
+}
+
+// ============================================================================
+
+async function proveReactionDeletion(parent: {
+  postKey: string;
+  posterAddress: string;
+  postContentID: string;
+  allPostsCounter: bigint;
+  userPostsCounter: bigint;
+  postBlockHeight: bigint;
+  deletionBlockHeight: bigint;
+  restorationBlockHeight: bigint;
+  postSignature: string;
+} | null,
+isTargetPost: boolean, targetKey: string, reactorAddressBase58: string,
+reactionCodePoint: bigint, allReactionsCounter: bigint, userReactionsCounter: bigint, targetReactionsCounter: bigint,
+reactionBlockHeight: bigint, restorationBlockHeight: bigint, reactionKey: Field, signatureBase58: string,
+deletionBlockHeight: Field, currentAllReactionsCounter: Field) {
+
+const signature = Signature.fromBase58(signatureBase58);
+const reactorAddress = PublicKey.fromBase58(reactorAddressBase58);
+const reactionCodePointAsField = Field(reactionCodePoint);
+
+    const initialReactionState = new ReactionState({
+      isTargetPost: Bool(isTargetPost),
+      targetKey: Field(targetKey),
+      reactorAddress: reactorAddress,
+      reactionCodePoint: reactionCodePointAsField,
+      allReactionsCounter: Field(allReactionsCounter),
+      userReactionsCounter: Field(userReactionsCounter),
+      targetReactionsCounter: Field(targetReactionsCounter),
+      reactionBlockHeight: Field(reactionBlockHeight),
+      deletionBlockHeight: Field(0),
+      restorationBlockHeight: Field(restorationBlockHeight)
+    });
+
+    const latestReactionsState = new ReactionState({
+      isTargetPost: Bool(isTargetPost),
+      targetKey: Field(targetKey),
+      reactorAddress: reactorAddress,
+      reactionCodePoint: reactionCodePointAsField,
+      allReactionsCounter: Field(allReactionsCounter),
+      userReactionsCounter: Field(userReactionsCounter),
+      targetReactionsCounter: Field(targetReactionsCounter),
+      reactionBlockHeight: Field(reactionBlockHeight),
+      deletionBlockHeight: deletionBlockHeight,
+      restorationBlockHeight: Field(restorationBlockHeight)
+    });
+
+    const usersReactionsCounters = usersReactionsCountersMap.getRoot();
+    const targetsReactionsCounters = targetsReactionsCountersMap.getRoot();
+
+    const initialReactions = reactionsMap.getRoot();
+    const reactionWitness = reactionsMap.getWitness(reactionKey);
+    reactionsMap.set(reactionKey, latestReactionsState.hash());
+    const latestReactions = reactionsMap.getRoot();
+
+    const currentPosts = postsMap.getRoot();
+    const parentState = new PostState({
+      posterAddress: PublicKey.fromBase58(parent!.posterAddress),
+      postContentID: CircuitString.fromString(parent!.postContentID),
+      allPostsCounter: Field(parent!.allPostsCounter),
+      userPostsCounter: Field(parent!.userPostsCounter),
+      postBlockHeight: Field(parent!.postBlockHeight),
+      deletionBlockHeight: Field(parent!.deletionBlockHeight),
+      restorationBlockHeight: Field(parent!.restorationBlockHeight)
+    });
+    const parentWitness = postsMap.getWitness(Field(parent!.postKey));
+
+    const transition = ReactionsTransition.createReactionDeletionTransition(
+      signature,
+      currentPosts,
+      parentState,
+      parentWitness,
+      currentAllReactionsCounter,
+      usersReactionsCounters,
+      targetsReactionsCounters,
+      initialReactions,
+      latestReactions,
+      initialReactionState,
+      reactionWitness,
+      deletionBlockHeight
+    );
+    console.log('Transition created');
+    
+    const proof = await Reactions.proveReactionDeletionTransition(
+      transition,
+      signature,
+      currentPosts,
+      parentState,
+      parentWitness,
+      currentAllReactionsCounter,
+      usersReactionsCounters,
+      targetsReactionsCounters,
+      initialReactions,
+      latestReactions,
+      initialReactionState,
+      reactionWitness,
+      deletionBlockHeight
     );
     console.log('Proof created');
 
