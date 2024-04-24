@@ -17,7 +17,8 @@ import { CommentState, PostState, ReactionState, fieldToFlagTargetAsReposted,
   fieldToFlagCommentsAsRestored,
   fieldToFlagRepostsAsDeleted,
   fieldToFlagRepostsAsRestored,
-  fieldToFlagReactionsAsDeleted
+  fieldToFlagReactionsAsDeleted,
+  fieldToFlagReactionsAsRestored
 } from 'wrdhom';
 import fs from 'fs/promises';
 import { fastifySchedule } from '@fastify/schedule';
@@ -158,6 +159,26 @@ const repostRestorations = await prisma.repostRestorations.findMany({
 });
 let totalNumberOfRepostRestorations = repostRestorations.length;
 console.log('totalNumberOfRepostRestorations: ' + totalNumberOfRepostRestorations);
+
+const reactionDeletions = await prisma.reactionDeletions.findMany({
+  where: {
+    deletionBlockHeight: {
+      gt: 0
+    }
+  }
+});
+let totalNumberOfReactionDeletions = reactionDeletions.length;
+console.log('totalNumberOfReactionDeletions: ' + totalNumberOfReactionDeletions);
+
+const reactionRestorations = await prisma.reactionRestorations.findMany({
+  where: {
+    restorationBlockHeight: {
+      gt: 0
+    }
+  }
+});
+let totalNumberOfReactionRestorations = reactionRestorations.length;
+console.log('totalNumberOfReactionRestorations: ' + totalNumberOfReactionRestorations);
 
 // Get content and keep it locally for faster reponses
 
@@ -609,6 +630,80 @@ const syncStateTask = new AsyncTask(
       repostsMap.set(repostKey, repostState.hash());
       totalNumberOfRepostRestorations += 1;
     }
+
+    const pendingReactionDeletions = await prisma.reactionDeletions.findMany({
+      where: {
+        allDeletionsCounter: {
+          gt: totalNumberOfReactionDeletions,
+        },
+        deletionBlockHeight: {
+          gt: 0
+        }
+      }
+    });
+
+    for (const pReactionDeletion of pendingReactionDeletions) {
+      const target = await prisma.reactions.findUnique({
+        where: {
+          reactionKey: pReactionDeletion.targetKey
+        }
+      });
+
+      console.log(pReactionDeletion);
+      const reactionState = new ReactionState({
+        isTargetPost: Bool(target!.isTargetPost),
+        targetKey: Field(target!.targetKey),
+        reactorAddress: PublicKey.fromBase58(target!.reactorAddress),
+        reactionCodePoint: Field(target!.reactionCodePoint),
+        allReactionsCounter: Field(target!.allReactionsCounter),
+        userReactionsCounter: Field(target!.userReactionsCounter),
+        targetReactionsCounter: Field(target!.targetReactionsCounter),
+        reactionBlockHeight: Field(target!.reactionBlockHeight),
+        deletionBlockHeight: Field(target!.deletionBlockHeight),
+        restorationBlockHeight: Field(target!.restorationBlockHeight)
+      });
+
+      const reactionKey = Field(target!.reactionKey);
+      reactionsMap.set(reactionKey, reactionState.hash());
+      totalNumberOfReactionDeletions += 1;
+    }
+
+    const pendingReactionRestorations = await prisma.reactionRestorations.findMany({
+      where: {
+        allRestorationsCounter: {
+          gt: totalNumberOfReactionRestorations,
+        },
+        restorationBlockHeight: {
+          gt: 0
+        }
+      }
+    });
+
+    for (const pReactionRestoration of pendingReactionRestorations) {
+      const target = await prisma.reactions.findUnique({
+        where: {
+          reactionKey: pReactionRestoration.targetKey
+        }
+      });
+
+      console.log(pReactionRestoration);
+      const reactionState = new ReactionState({
+        isTargetPost: Bool(target!.isTargetPost),
+        targetKey: Field(target!.targetKey),
+        reactorAddress: PublicKey.fromBase58(target!.reactorAddress),
+        reactionCodePoint: Field(target!.reactionCodePoint),
+        allReactionsCounter: Field(target!.allReactionsCounter),
+        userReactionsCounter: Field(target!.userReactionsCounter),
+        targetReactionsCounter: Field(target!.targetReactionsCounter),
+        reactionBlockHeight: Field(target!.reactionBlockHeight),
+        deletionBlockHeight: Field(target!.deletionBlockHeight),
+        restorationBlockHeight: Field(target!.restorationBlockHeight)
+      });
+
+      const reactionKey = Field(target!.reactionKey);
+      reactionsMap.set(reactionKey, reactionState.hash());
+      totalNumberOfReactionRestorations += 1;
+    }
   },
   (e) => {console.error(e)}
 )
@@ -734,6 +829,19 @@ server.post<{Body: SignedData}>('/reactions', async (request) => {
     const reactorAddressAsField = Poseidon.hash(reactorAddress.toFields());
     const reactionCodePointAsField = Field(reactionEmojiCodePoint);
     const reactionKey = Poseidon.hash([targetKey, reactorAddressAsField, reactionCodePointAsField]);
+
+    const reaction = await prisma.reactions.findUnique({
+      where: {
+        reactionKey: reactionKey.toString()
+      }
+    });
+
+    if (reaction !== null && Number(reaction?.deletionBlockHeight) !== 0) {
+      return {
+        reactionKey: reactionKey.toString(),
+        message: 'Restore?'
+      }
+    }
 
     if (isSigned) {
       console.log(String.fromCodePoint(reactionEmojiCodePoint));
@@ -878,7 +986,7 @@ server.post<{Body: SignedData}>('/reposts', async (request) => {
   });
 
   if (post?.posterAddress === null) {
-    return `The target you are trying to react to doesn't exist`;
+    return `The target you are trying to repost doesn't exist`;
   }
 
   const signature = Signature.fromBase58(request.body.signature);
@@ -1486,6 +1594,83 @@ server.post<{Body: SignedRepostRestoration}>('/reposts/restore', async (request)
     return 'Valid Restoration!';
   } else {
     return 'Repost restoration message is not signed';
+  }
+});
+
+// ============================================================================
+
+server.post<{Body: SignedReactionRestoration}>('/reactions/restore', async (request) => {
+
+  const signature = Signature.fromBase58(request.body.signedData.signature);
+  const reactorAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
+  const reactionKey = request.body.reactionKey;
+
+  const reaction = await prisma.reactions.findUnique({
+    where: {
+      reactionKey: reactionKey
+    }
+  });
+
+  if(Number(reaction!.deletionBlockHeight) === 0) {
+    return 'Reaction has not been deleted, so it cannot be restored';
+  }
+
+  const pendingRestoration = await prisma.postRestorations.findFirst({
+    where: {
+      targetKey: reactionKey
+    }
+  })
+
+  
+  if (pendingRestoration !== null && pendingRestoration?.restorationBlockHeight === 0n) {
+    return 'Reaction restoration is already pending';
+  }
+
+  const reactionState = new ReactionState({
+    isTargetPost: Bool(true),
+    targetKey: Field(request.body.targetKey),
+    reactorAddress: reactorAddress,
+    reactionCodePoint: Field(reaction!.reactionCodePoint),
+    allReactionsCounter: Field(reaction!.allReactionsCounter),
+    userReactionsCounter: Field(reaction!.userReactionsCounter),
+    targetReactionsCounter: Field(reaction!.targetReactionsCounter),
+    reactionBlockHeight: Field(reaction!.reactionBlockHeight),
+    deletionBlockHeight: Field(reaction!.deletionBlockHeight),
+    restorationBlockHeight: Field(reaction!.restorationBlockHeight)
+  });
+
+  const isSigned = signature.verify(reactorAddress, [
+    reactionState.hash(),
+    fieldToFlagReactionsAsRestored
+  ]);
+
+  // Check that message to restore reaction is signed
+  if (isSigned) {
+    console.log(request.body.reactionKey);
+    const allRestorationsCounter = (await prisma.reactionRestorations.count()) + 1;
+    console.log('allReactionsRestorationsCounter: ' + allRestorationsCounter);
+
+    const restorationsForTarget = await prisma.reactionRestorations.findMany({
+      where: {
+        targetKey: request.body.reactionKey
+      }
+    });
+    const targetRestorationsCounter = restorationsForTarget.length + 1;
+    console.log('targetReactionsRestorationsCounter: ' + targetRestorationsCounter);
+
+    await prisma.reactionRestorations.create({
+      data: {
+        targetKey: request.body.reactionKey,
+        allRestorationsCounter: allRestorationsCounter,
+        targetRestorationsCounter: targetRestorationsCounter,
+        restorationBlockHeight: 0,
+        restorationSignature: request.body.signedData.signature
+      }
+    });
+
+    return 'Valid Restoration!';
+  } else {
+    return 'Reaction restoration message is not signed';
   }
 });
 
@@ -2155,6 +2340,40 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
 
 // ============================================================================
 
+server.get<{Querystring: ReactionQuery}>('/reactions', async (request) => {
+  try {
+
+    const { reactionKey } = request.query;
+    const reaction = await prisma.reactions.findUnique({
+      where: {
+        reactionKey: reactionKey
+      }
+    });
+
+    const reactorAddress = PublicKey.fromBase58(reaction!.reactorAddress);
+
+    const reactionState = new ReactionState({
+      isTargetPost: Bool(reaction!.isTargetPost),
+      targetKey: Field(reaction!.targetKey),
+      reactorAddress: reactorAddress,
+      reactionCodePoint: Field(reaction!.reactionCodePoint),
+      allReactionsCounter: Field(reaction!.allReactionsCounter),
+      userReactionsCounter: Field(reaction!.userReactionsCounter),
+      reactionBlockHeight: Field(reaction!.reactionBlockHeight),
+      targetReactionsCounter: Field(reaction!.targetReactionsCounter),
+      deletionBlockHeight: Field(reaction!.deletionBlockHeight),
+      restorationBlockHeight: Field(reaction!.restorationBlockHeight)
+    });
+
+    return { reactionState: JSON.stringify(reactionState)};
+
+  } catch(e) {
+    console.error(e);
+  }
+});
+
+// ============================================================================
+
 interface SignedData {
   signature: string,
   publicKey: string,
@@ -2207,6 +2426,12 @@ interface CommentsQuery {
 
 // ============================================================================
 
+interface ReactionQuery {
+  reactionKey: string
+}
+
+// ============================================================================
+
 interface SignedPostDeletion {
   postKey: string,
   signedData: SignedData
@@ -2255,6 +2480,14 @@ interface SignedCommentRestoration {
 interface SignedRepostRestoration {
   targetKey: string,
   repostKey: string,
+  signedData: SignedData
+}
+
+// ============================================================================
+
+interface SignedReactionRestoration {
+  targetKey: string,
+  reactionKey: string,
   signedData: SignedData
 }
 
