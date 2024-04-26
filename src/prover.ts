@@ -20,6 +20,7 @@ import {
   regenerateRepostsZkAppState
 } from './utils/state.js';
 import * as dotenv from 'dotenv';
+import { Queue, QueueEvents } from 'bullmq';
 
 // ============================================================================
 
@@ -28,6 +29,15 @@ dotenv.config();
 
 // Set up client for PostgreSQL for structured data
 const prisma = new PrismaClient();
+
+// Define connection to Redis instance for BullMQ
+const connection = {
+  host: 'localhost',
+  port: 6379
+}
+
+const queue = new Queue('queue', {connection});
+const queueEvents = new QueueEvents('queue', {connection});
 
 // Load keys, and set up network and smart contract
 
@@ -170,7 +180,7 @@ while (true) {
   // Process pending posts to update on-chain state
 
   const pendingPosts = await prisma.posts.findMany({
-    take: 1,
+    take: 3,
     orderBy: {
         allPostsCounter: 'asc'
     },
@@ -188,14 +198,21 @@ while (true) {
     const lastBlock = await fetchLastBlock(configPosts.url);
     const postBlockHeight = lastBlock.blockchainLength.toBigint();
     console.log(postBlockHeight);
-  
-    const transitionsAndProofs: {
-      transition: PostsTransition,
-      proof: PostsProof
+
+    const provePostInputs: {
+      signature: string,
+      transition: string,
+      postState: string,
+      initialUsersPostsCounters: string,
+      latestUsersPostsCounters: string,
+      initialPosts: string,
+      latestPosts: string,
+      userPostsCounterWitness: string,
+      postWitness: string
     }[] = [];
   
     for (const pPost of pendingPosts) {
-      const result = await provePost(
+      const result = await generateProvePostInputs(
         pPost.postSignature,
         pPost.posterAddress,
         pPost.postContentID,
@@ -206,14 +223,41 @@ while (true) {
         pPost.restorationBlockHeight
       );
   
-      transitionsAndProofs.push(result);
+      provePostInputs.push(result);
     }
+
+    const jobsPromises: Promise<any>[] = [];
+
+    for (const provePostInput of provePostInputs) {
+      const job = await queue.add(
+        `job`,
+        { provePostInput: provePostInput }
+      );
+      jobsPromises.push(job.waitUntilFinished(queueEvents));
+    }
+
+    const transitionsAndProofsAsStrings: {
+      transition: string;
+      proof: string;
+    }[] = await Promise.all(jobsPromises);
+  
+    const transitionsAndProofs: {
+      transition: PostsTransition,
+      proof: PostsProof
+    }[] = [];
+  
+    transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+      transitionsAndProofs.push({
+        transition: PostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
+        proof: PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+      });
+    });
+
+    endTime = performance.now();
+    console.log(`${(endTime - startTime)/1000/60} minutes`);
   
     if (transitionsAndProofs.length !== 0) {
       await updatePostsOnChainState(transitionsAndProofs);
-  
-      endTime = performance.now();
-      console.log(`${(endTime - startTime)/1000/60} minutes`);
   
       let tries = 0;
       const maxTries = 50;
@@ -2011,7 +2055,7 @@ while (true) {
 
 // ============================================================================
 
-async function provePost(signatureBase58: string, posterAddressBase58: string,
+async function generateProvePostInputs(signatureBase58: string, posterAddressBase58: string,
   postCID: string, allPostsCounter: bigint, userPostsCounter: bigint,
   postBlockHeight: bigint, deletionBlockHeight: bigint, restorationBlockHeight: bigint) {
 
@@ -2055,23 +2099,18 @@ async function provePost(signatureBase58: string, posterAddressBase58: string,
         postWitness
       );
       console.log('Transition created');
-      
-      const proof = await Posts.provePostPublishingTransition(
-        transition,
-        signature,
-        postState.allPostsCounter.sub(1),
-        initialUsersPostsCounters,
-        latestUsersPostsCounters,
-        postState.userPostsCounter.sub(1),
-        userPostsCounterWitness,
-        initialPosts,
-        latestPosts,
-        postState,
-        postWitness
-      );
-      console.log('Proof created');
 
-      return {transition: transition, proof: proof};
+      return {
+        signature: signatureBase58,
+        transition: JSON.stringify(transition),
+        postState: JSON.stringify(postState),
+        initialUsersPostsCounters: initialUsersPostsCounters.toString(),
+        latestUsersPostsCounters: latestUsersPostsCounters.toString(),
+        initialPosts: initialPosts.toString(),
+        latestPosts: latestPosts.toString(),
+        userPostsCounterWitness: JSON.stringify(userPostsCounterWitness.toJSON()),
+        postWitness: JSON.stringify(postWitness.toJSON()),
+      };
 }
   
 // ============================================================================
