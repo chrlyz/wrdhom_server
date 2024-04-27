@@ -38,6 +38,8 @@ const connection = {
 
 const queue = new Queue('queue', {connection});
 const queueEvents = new QueueEvents('queue', {connection});
+const mergingQueue = new Queue('mergingQueue', {connection});
+const mergingQueueEvents = new QueueEvents('mergingQueue', {connection});
 
 // Load keys, and set up network and smart contract
 
@@ -257,7 +259,10 @@ while (true) {
     console.log(`${(endTime - startTime)/1000/60} minutes`);
   
     if (transitionsAndProofs.length !== 0) {
+      startTime = performance.now();
       await updatePostsOnChainState(transitionsAndProofs);
+      endTime = performance.now();
+      console.log(`${(endTime - startTime)/1000/60} minutes`);
   
       let tries = 0;
       const maxTries = 50;
@@ -2114,60 +2119,75 @@ async function generateProvePostInputs(signatureBase58: string, posterAddressBas
 }
   
 // ============================================================================
-  
-  async function updatePostsOnChainState(transitionsAndProofs: {
-    transition: PostsTransition,
-    proof: PostsProof
-  }[]) {
-    let accumulatedMergedTransitions = transitionsAndProofs[0].transition;
-    let accumulatedMergedProof = transitionsAndProofs[0].proof;
-    for (let i = 0; i < transitionsAndProofs.length - 1; i++) {
-      const currentElement = transitionsAndProofs[i+1];
-  
-      accumulatedMergedTransitions = PostsTransition.mergePostsTransitions(
-        accumulatedMergedTransitions,
-        currentElement.transition
-      );
-  
-      console.log('initialAllPostsCounter: ' + accumulatedMergedTransitions.initialAllPostsCounter.toString());
-      console.log('latestAllPostsCounter: ' + accumulatedMergedTransitions.latestAllPostsCounter.toString());
-      console.log('initialUsersPostsCounters: ' + accumulatedMergedTransitions.initialUsersPostsCounters.toString());
-      console.log('latestUsersPostsCounters: ' + accumulatedMergedTransitions.latestUsersPostsCounters.toString());
-      console.log('initialPosts: ' + accumulatedMergedTransitions.initialPosts.toString());
-      console.log('latestPosts: ' + accumulatedMergedTransitions.latestPosts.toString());
-      console.log('blockHeight: ' + accumulatedMergedTransitions.blockHeight.toString());
-  
-      accumulatedMergedProof = await Posts.proveMergedPostsTransitions(
-        accumulatedMergedTransitions,
-        accumulatedMergedProof,
-        currentElement.proof
-      );
-  
-      console.log('proof.initialAllPostsCounter: ' + accumulatedMergedProof.publicInput.initialAllPostsCounter.toString());
-      console.log('proof.latestAllPostsCounter: ' + accumulatedMergedProof.publicInput.latestAllPostsCounter.toString());
-      console.log('proof.initialUsersPostsCounters: ' + accumulatedMergedProof.publicInput.initialUsersPostsCounters.toString());
-      console.log('proof.latestUsersPostsCounters: ' + accumulatedMergedProof.publicInput.latestUsersPostsCounters.toString());
-      console.log('proof.initialPosts: ' + accumulatedMergedProof.publicInput.initialPosts.toString());
-      console.log('proof.latestPosts: ' + accumulatedMergedProof.publicInput.latestPosts.toString());
-      console.log('proof.blockHeight: ' + accumulatedMergedProof.publicInput.blockHeight.toString());
-    }
-    
-    let sentTxn;
-    const txn = await Mina.transaction(
-      { sender: feepayerAddress, fee: fee },
-      () => {
-        postsContract.update(accumulatedMergedProof);
+
+type PostTransitionAndProof = {
+  transition: PostsTransition,
+  proof: PostsProof
+}
+
+async function updatePostsOnChainState(transitionsAndProofs: PostTransitionAndProof[]) {
+
+  async function mergeTransitionsAndProofs(tp1: PostTransitionAndProof, tp2: PostTransitionAndProof) {
+    const mergedTransition = PostsTransition.mergePostsTransitions(tp1.transition, tp2.transition);
+    const job = await mergingQueue.add(
+      `job`,
+      { mergedTransition: JSON.stringify(mergedTransition),
+        proof1: JSON.stringify(tp1.proof.toJSON()),
+        proof2: JSON.stringify(tp2.proof.toJSON())
       }
     );
-    await txn.prove();
-    sentTxn = await txn.sign([feepayerKey]).send();
-  
-    if (sentTxn !== undefined) {
-      console.log(`https://minascan.io/berkeley/tx/${sentTxn.hash}`);
-    }
-
-    return sentTxn;
+    return job.waitUntilFinished(mergingQueueEvents);
   }
+
+  async function recursiveMerge(transitionsAndProofs: PostTransitionAndProof[]): Promise<PostTransitionAndProof> {
+      if (transitionsAndProofs.length === 1) {
+          return transitionsAndProofs[0];
+      }
+
+      const mergedTransitionsAndProofs = [];
+      for (let i = 0; i < transitionsAndProofs.length; i += 2) {
+          if (i + 1 < transitionsAndProofs.length) {
+            mergedTransitionsAndProofs.push(mergeTransitionsAndProofs(transitionsAndProofs[i], transitionsAndProofs[i+1]));
+          } else {
+            const x = Promise.resolve(transitionsAndProofs[i])
+            mergedTransitionsAndProofs.push(Promise.resolve({
+              transition: JSON.stringify(transitionsAndProofs[i].transition),
+              proof: JSON.stringify(transitionsAndProofs[i].proof.toJSON())
+            }));
+          }
+      }
+      const processedMergedTransitionsAndProofs:{
+        transition: string;
+        proof: string;
+      }[] = await Promise.all(mergedTransitionsAndProofs);
+      const processedMergedTransitionsAndProofsCasted: PostTransitionAndProof[] = [];
+      processedMergedTransitionsAndProofs.forEach(transitionAndProof => {
+        processedMergedTransitionsAndProofsCasted.push({
+          transition: PostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
+          proof: PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+        });
+      });
+      return recursiveMerge(processedMergedTransitionsAndProofsCasted);
+  }
+
+  const result = await recursiveMerge(transitionsAndProofs);
+  
+  let sentTxn;
+  const txn = await Mina.transaction(
+    { sender: feepayerAddress, fee: fee },
+    () => {
+      postsContract.update(result.proof);
+    }
+  );
+  await txn.prove();
+  sentTxn = await txn.sign([feepayerKey]).send();
+
+  if (sentTxn !== undefined) {
+    console.log(`https://minascan.io/berkeley/tx/${sentTxn.hash}`);
+  }
+
+  return sentTxn;
+}
 
 // ============================================================================
 
