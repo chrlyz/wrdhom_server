@@ -1,5 +1,5 @@
 import { Signature, Field, MerkleMapWitness } from 'o1js';
-import { PostState, PostsTransition, Posts } from 'wrdhom';
+import { PostState, PostsTransition, Posts, PostsProof } from 'wrdhom';
 import { Worker } from 'bullmq';
 import * as dotenv from 'dotenv';
 
@@ -42,6 +42,18 @@ const worker = new Worker('queue', async job => {
     userPostsCounterWitness
     );
     return provePostOutput;
+
+  }, { connection: connection, lockDuration: 600000 });
+
+  const mergingWorker = new Worker('mergingQueue', async job => {
+
+    const mergedTransition = PostsTransition.fromJSON(JSON.parse(job.data.mergedTransition));
+    const proof1 = PostsProof.fromJSON(JSON.parse(job.data.proof1));
+    const proof2 = PostsProof.fromJSON(JSON.parse(job.data.proof2));
+
+    const proof = await Posts.proveMergedPostsTransitions(mergedTransition, proof1, proof2);
+    console.log('Merged proof created');
+    return {transition: JSON.stringify(mergedTransition), proof: JSON.stringify(proof.toJSON()) }
 
   }, { connection: connection, lockDuration: 600000 });
 
