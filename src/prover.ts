@@ -48,6 +48,8 @@ const reactionsQueue = new Queue('reactionsQueue', {connection});
 const reactionsQueueEvents = new QueueEvents('reactionsQueue', {connection});
 const mergingReactionsQueue = new Queue('mergingReactionsQueue', {connection});
 const mergingReactionsQueueEvents = new QueueEvents('mergingReactionsQueue', {connection});
+const reactionDeletionsQueue = new Queue('reactionDeletionsQueue', {connection});
+const reactionDeletionsQueueEvents = new QueueEvents('reactionDeletionsQueue', {connection});
 
 
 // Load keys, and set up network and smart contract
@@ -447,8 +449,8 @@ while (true) {
       console.log(`${(endTime - startTime)/1000/60} minutes`);
     
       if (transitionsAndProofs.length !== 0) {
+        startTime = performance.now();
         await updateReactionsOnChainState(transitionsAndProofs);
-    
         endTime = performance.now();
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
@@ -1857,7 +1859,7 @@ while (true) {
   } else if (provingTurn === provingReactionDeletions) {
 
     const pendingReactionDeletions = await prisma.reactionDeletions.findMany({
-      take: 1,
+      take: 3,
       orderBy: {
           allDeletionsCounter: 'asc'
       },
@@ -1875,10 +1877,21 @@ while (true) {
       console.log(deletionBlockHeight);
 
       const currentAllReactionsCounter = await prisma.reactions.count();
-    
-      const transitionsAndProofs: {
-        transition: ReactionsTransition,
-        proof: ReactionsProof
+
+      const proveReactionDeletionInputs: {
+        transition: string,
+        signature: string,
+        targets: string,
+        postState: string,
+        targetWitness: string,
+        currentAllReactionsCounter: string,
+        usersReactionsCounters: string,
+        targetsReactionsCounters: string,
+        initialReactions: string,
+        latestReactions: string,
+        initialReactionState: string,
+        reactionWitness: string,
+        deletionBlockHeight: string
       }[] = [];
     
       for (const pDeletion of pendingReactionDeletions) {
@@ -1895,7 +1908,7 @@ while (true) {
           }
         });
 
-        const result = await proveReactionDeletion(
+        const result = await generateReactionDeletionInputs(
           parent,
           reaction!.isTargetPost,
           reaction!.targetKey,
@@ -1912,12 +1925,42 @@ while (true) {
           Field(currentAllReactionsCounter)
         );
     
-        transitionsAndProofs.push(result);
+        proveReactionDeletionInputs.push(result);
       }
 
-      if (transitionsAndProofs.length !== 0) {
-        await updateReactionsOnChainState(transitionsAndProofs);
+      const jobsPromises: Promise<any>[] = [];
+
+      for (const proveReactionDeletionInput of proveReactionDeletionInputs) {
+        const job = await reactionDeletionsQueue.add(
+          `job`,
+          { proveReactionDeletionInput: proveReactionDeletionInput }
+        );
+        jobsPromises.push(job.waitUntilFinished(reactionDeletionsQueueEvents));
+      }
+  
+      const transitionsAndProofsAsStrings: {
+        transition: string;
+        proof: string;
+      }[] = await Promise.all(jobsPromises);
     
+      const transitionsAndProofs: {
+        transition: ReactionsTransition,
+        proof: ReactionsProof
+      }[] = [];
+    
+      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+        transitionsAndProofs.push({
+          transition: ReactionsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
+          proof: ReactionsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+        });
+      });
+  
+      endTime = performance.now();
+      console.log(`${(endTime - startTime)/1000/60} minutes`);
+
+      if (transitionsAndProofs.length !== 0) {
+        startTime = performance.now();
+        await updateReactionsOnChainState(transitionsAndProofs);
         endTime = performance.now();
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
@@ -3286,7 +3329,7 @@ const reposterAddress = PublicKey.fromBase58(reposterAddressBase58);
 
 // ============================================================================
 
-async function proveReactionDeletion(parent: {
+async function generateReactionDeletionInputs(parent: {
   postKey: string;
   posterAddress: string;
   postContentID: string;
@@ -3368,24 +3411,21 @@ const reactionCodePointAsField = Field(reactionCodePoint);
     );
     console.log('Transition created');
     
-    const proof = await Reactions.proveReactionDeletionTransition(
-      transition,
-      signature,
-      currentPosts,
-      parentState,
-      parentWitness,
-      currentAllReactionsCounter,
-      usersReactionsCounters,
-      targetsReactionsCounters,
-      initialReactions,
-      latestReactions,
-      initialReactionState,
-      reactionWitness,
-      deletionBlockHeight
-    );
-    console.log('Proof created');
-
-    return {transition: transition, proof: proof};
+    return {
+      transition: JSON.stringify(transition),
+      signature: signatureBase58,
+      targets: currentPosts.toString(),
+      postState: JSON.stringify(parentState),
+      targetWitness: JSON.stringify(parentWitness.toJSON()),
+      currentAllReactionsCounter: currentAllReactionsCounter.toString(),
+      usersReactionsCounters: usersReactionsCounters.toString(),
+      targetsReactionsCounters: targetsReactionsCounters.toString(),
+      initialReactions: initialReactions.toString(),
+      latestReactions: latestReactions.toString(),
+      initialReactionState: JSON.stringify(initialReactionState),
+      reactionWitness: JSON.stringify(reactionWitness.toJSON()),
+      deletionBlockHeight: deletionBlockHeight.toString()
+    }
 }
 
 // ============================================================================
