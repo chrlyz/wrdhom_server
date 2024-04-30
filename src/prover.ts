@@ -44,6 +44,11 @@ const postDeletionsQueue = new Queue('postDeletionsQueue', {connection});
 const postDeletionsQueueEvents = new QueueEvents('postDeletionsQueue', {connection});
 const postRestorationsQueue = new Queue('postRestorationsQueue', {connection});
 const postRestorationsQueueEvents = new QueueEvents('postRestorationsQueue', {connection});
+const reactionsQueue = new Queue('reactionsQueue', {connection});
+const reactionsQueueEvents = new QueueEvents('reactionsQueue', {connection});
+const mergingReactionsQueue = new Queue('mergingReactionsQueue', {connection});
+const mergingReactionsQueueEvents = new QueueEvents('mergingReactionsQueue', {connection});
+
 
 // Load keys, and set up network and smart contract
 
@@ -356,7 +361,7 @@ while (true) {
   } else if (provingTurn === provingReactions) {
 
     const pendingReactions = await prisma.reactions.findMany({
-      take: 1,
+      take: 3,
       orderBy: {
           allReactionsCounter: 'asc'
       },
@@ -374,14 +379,27 @@ while (true) {
       const lastBlock = await fetchLastBlock(configReactions.url);
       const reactionBlockHeight = lastBlock.blockchainLength.toBigint();
       console.log(reactionBlockHeight);
-    
-      const transitionsAndProofs: {
-        transition: ReactionsTransition,
-        proof: ReactionsProof
+
+      const proveReactionInputs: {
+        transition: string,
+        signature: string,
+        targets: string,
+        postState: string,
+        targetWitness: string,
+        reactionState: string,
+        initialUsersReactionsCounters: string,
+        latestUsersReactionsCounters: string,
+        userReactionsCounterWitness: string,
+        initialTargetsReactionsCounters: string,
+        latestTargetsReactionsCounters: string,
+        targetReactionsCounterWitness: string,
+        initialReactions: string,
+        latestReactions: string,
+        reactionWitness: string
       }[] = [];
     
       for (const pReaction of pendingReactions) {
-        const result = await proveReaction(
+        const result = await generateProveReactionInputs(
           pReaction.isTargetPost,
           pReaction.targetKey,
           pReaction.reactorAddress,
@@ -395,8 +413,38 @@ while (true) {
           pReaction.reactionSignature
         );
     
-        transitionsAndProofs.push(result);
+        proveReactionInputs.push(result);
       }
+
+      const jobsPromises: Promise<any>[] = [];
+
+      for (const proveReactionInput of proveReactionInputs) {
+        const job = await reactionsQueue.add(
+          `job`,
+          { proveReactionInput: proveReactionInput }
+        );
+        jobsPromises.push(job.waitUntilFinished(reactionsQueueEvents));
+      }
+  
+      const transitionsAndProofsAsStrings: {
+        transition: string;
+        proof: string;
+      }[] = await Promise.all(jobsPromises);
+    
+      const transitionsAndProofs: {
+        transition: ReactionsTransition,
+        proof: ReactionsProof
+      }[] = [];
+    
+      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+        transitionsAndProofs.push({
+          transition: ReactionsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
+          proof: ReactionsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+        });
+      });
+  
+      endTime = performance.now();
+      console.log(`${(endTime - startTime)/1000/60} minutes`);
     
       if (transitionsAndProofs.length !== 0) {
         await updateReactionsOnChainState(transitionsAndProofs);
@@ -2270,7 +2318,7 @@ async function updatePostsOnChainState(transitionsAndProofs: PostTransitionAndPr
 
 // ============================================================================
 
-async function proveReaction(isTargetPost: boolean, targetKey: string,
+async function generateProveReactionInputs(isTargetPost: boolean, targetKey: string,
   reactorAddressBase58: string, reactionCodePoint: bigint,
   allReactionsCounter: bigint, userReactionsCounter: bigint,
   targetReactionsCounter: bigint, reactionBlockHeight: bigint,
@@ -2349,43 +2397,85 @@ async function proveReaction(isTargetPost: boolean, targetKey: string,
     reactionState
   );
   console.log('Transition created');
-  
-  const proof = await Reactions.proveReactionPublishingTransition(
-    transition,
-    signature,
-    postsMap.getRoot(),
-    postState,
-    targetWitness,
-    reactionState.allReactionsCounter.sub(1),
-    initialUsersReactionsCounters,
-    latestUsersReactionsCounters,
-    reactionState.userReactionsCounter.sub(1),
-    userReactionsCounterWitness,
-    initialTargetsReactionsCounters,
-    latestTargetsReactionsCounters,
-    reactionState.targetReactionsCounter.sub(1),
-    targetReactionsCounterWitness,
-    initialReactions,
-    latestReactions,
-    reactionWitness,
-    reactionState
-  );
-  console.log('Proof created');
 
-  return {transition: transition, proof: proof};
+  return {
+    transition: JSON.stringify(transition),
+    signature: signatureBase58,
+    targets: postsMap.getRoot().toString(),
+    postState: JSON.stringify(postState),
+    targetWitness: JSON.stringify(targetWitness.toJSON()),
+    reactionState: JSON.stringify(reactionState),
+    initialUsersReactionsCounters: initialUsersReactionsCounters.toString(),
+    latestUsersReactionsCounters: latestUsersReactionsCounters.toString(),
+    userReactionsCounterWitness: JSON.stringify(userReactionsCounterWitness.toJSON()),
+    initialTargetsReactionsCounters: initialTargetsReactionsCounters.toString(),
+    latestTargetsReactionsCounters: latestTargetsReactionsCounters.toString(),
+    targetReactionsCounterWitness: JSON.stringify(targetReactionsCounterWitness.toJSON()),
+    initialReactions: initialReactions.toString(),
+    latestReactions: latestReactions.toString(),
+    reactionWitness: JSON.stringify(reactionWitness.toJSON())
+  }
 }
 
 // ============================================================================
 
-async function updateReactionsOnChainState(transitionsAndProofs: {
+type ReactionTransitionAndProof = {
   transition: ReactionsTransition,
   proof: ReactionsProof
-}[]) {
+}
+
+async function updateReactionsOnChainState(transitionsAndProofs: ReactionTransitionAndProof[]) {
+
+  async function mergeTransitionsAndProofs(tp1: ReactionTransitionAndProof, tp2: ReactionTransitionAndProof) {
+    const mergedTransition = ReactionsTransition.mergeReactionsTransitions(tp1.transition, tp2.transition);
+    const job = await mergingReactionsQueue.add(
+      `job`,
+      { mergedTransition: JSON.stringify(mergedTransition),
+        proof1: JSON.stringify(tp1.proof.toJSON()),
+        proof2: JSON.stringify(tp2.proof.toJSON())
+      }
+    );
+    return job.waitUntilFinished(mergingReactionsQueueEvents);
+  }
+
+  async function recursiveMerge(transitionsAndProofs: ReactionTransitionAndProof[]): Promise<ReactionTransitionAndProof> {
+      if (transitionsAndProofs.length === 1) {
+          return transitionsAndProofs[0];
+      }
+
+      const mergedTransitionsAndProofs = [];
+      for (let i = 0; i < transitionsAndProofs.length; i += 2) {
+          if (i + 1 < transitionsAndProofs.length) {
+            mergedTransitionsAndProofs.push(mergeTransitionsAndProofs(transitionsAndProofs[i], transitionsAndProofs[i+1]));
+          } else {
+            const x = Promise.resolve(transitionsAndProofs[i])
+            mergedTransitionsAndProofs.push(Promise.resolve({
+              transition: JSON.stringify(transitionsAndProofs[i].transition),
+              proof: JSON.stringify(transitionsAndProofs[i].proof.toJSON())
+            }));
+          }
+      }
+      const processedMergedTransitionsAndProofs:{
+        transition: string;
+        proof: string;
+      }[] = await Promise.all(mergedTransitionsAndProofs);
+      const processedMergedTransitionsAndProofsCasted: ReactionTransitionAndProof[] = [];
+      processedMergedTransitionsAndProofs.forEach(transitionAndProof => {
+        processedMergedTransitionsAndProofsCasted.push({
+          transition: ReactionsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
+          proof: ReactionsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+        });
+      });
+      return recursiveMerge(processedMergedTransitionsAndProofsCasted);
+  }
+
+  const result = await recursiveMerge(transitionsAndProofs);
+  
   let sentTxn;
   const txn = await Mina.transaction(
     { sender: feepayerAddress, fee: fee },
     () => {
-      reactionsContract.update(transitionsAndProofs[0].proof);
+      reactionsContract.update(result.proof);
     }
   );
   await txn.prove();
