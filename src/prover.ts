@@ -50,6 +50,8 @@ const mergingReactionsQueue = new Queue('mergingReactionsQueue', {connection});
 const mergingReactionsQueueEvents = new QueueEvents('mergingReactionsQueue', {connection});
 const reactionDeletionsQueue = new Queue('reactionDeletionsQueue', {connection});
 const reactionDeletionsQueueEvents = new QueueEvents('reactionDeletionsQueue', {connection});
+const reactionRestorationsQueue = new Queue('reactionRestorationsQueue', {connection});
+const reactionRestorationsQueueEvents = new QueueEvents('reactionRestorationsQueue', {connection});
 
 
 // Load keys, and set up network and smart contract
@@ -2060,7 +2062,7 @@ while (true) {
   } else if (provingTurn === provingReactionRestorations) {
 
     const pendingReactionRestorations = await prisma.reactionRestorations.findMany({
-      take: 1,
+      take: 3,
       orderBy: {
           allRestorationsCounter: 'asc'
       },
@@ -2078,10 +2080,21 @@ while (true) {
       console.log(restorationBlockHeight);
 
       const currentAllReactionsCounter = await prisma.reactions.count();
-    
-      const transitionsAndProofs: {
-        transition: ReactionsTransition,
-        proof: ReactionsProof
+
+      const proveReactionRestorationInputs: {
+        transition: string,
+        signature: string,
+        targets: string,
+        postState: string,
+        targetWitness: string,
+        currentAllReactionsCounter: string,
+        usersReactionsCounters: string,
+        targetsReactionsCounters: string,
+        initialReactions: string,
+        latestReactions: string,
+        initialReactionState: string,
+        reactionWitness: string,
+        restorationBlockHeight: string
       }[] = [];
     
       for (const pRestoration of pendingReactionRestorations) {
@@ -2098,7 +2111,7 @@ while (true) {
           }
         });
 
-        const result = await proveReactionRestoration(
+        const result = await generateReactionRestorationInputs(
           parent,
           reaction!.isTargetPost,
           reaction!.targetKey,
@@ -2116,12 +2129,42 @@ while (true) {
           Field(currentAllReactionsCounter)
         );
     
-        transitionsAndProofs.push(result);
+        proveReactionRestorationInputs.push(result);
       }
 
-      if (transitionsAndProofs.length !== 0) {
-        await updateReactionsOnChainState(transitionsAndProofs);
+      const jobsPromises: Promise<any>[] = [];
+
+      for (const proveReactionRestorationInput of proveReactionRestorationInputs) {
+        const job = await reactionRestorationsQueue.add(
+          `job`,
+          { proveReactionRestorationInput: proveReactionRestorationInput }
+        );
+        jobsPromises.push(job.waitUntilFinished(reactionRestorationsQueueEvents));
+      }
+  
+      const transitionsAndProofsAsStrings: {
+        transition: string;
+        proof: string;
+      }[] = await Promise.all(jobsPromises);
     
+      const transitionsAndProofs: {
+        transition: ReactionsTransition,
+        proof: ReactionsProof
+      }[] = [];
+    
+      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+        transitionsAndProofs.push({
+          transition: ReactionsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
+          proof: ReactionsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+        });
+      });
+  
+      endTime = performance.now();
+      console.log(`${(endTime - startTime)/1000/60} minutes`);
+
+      if (transitionsAndProofs.length !== 0) {
+        startTime = performance.now();
+        await updateReactionsOnChainState(transitionsAndProofs);
         endTime = performance.now();
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
@@ -3430,7 +3473,7 @@ const reactionCodePointAsField = Field(reactionCodePoint);
 
 // ============================================================================
 
-async function proveReactionRestoration(parent: {
+async function generateReactionRestorationInputs(parent: {
   postKey: string;
   posterAddress: string;
   postContentID: string;
@@ -3511,25 +3554,22 @@ const reactionCodePointAsField = Field(reactionCodePoint);
       newRestorationBlockHeight
     );
     console.log('Transition created');
-    
-    const proof = await Reactions.proveReactionRestorationTransition(
-      transition,
-      signature,
-      currentPosts,
-      parentState,
-      parentWitness,
-      currentAllReactionsCounter,
-      usersReactionsCounters,
-      targetsReactionsCounters,
-      initialReactions,
-      latestReactions,
-      initialReactionState,
-      reactionWitness,
-      newRestorationBlockHeight
-    );
-    console.log('Proof created');
 
-    return {transition: transition, proof: proof};
+    return {
+      transition: JSON.stringify(transition),
+      signature: signatureBase58,
+      targets: currentPosts.toString(),
+      postState: JSON.stringify(parentState),
+      targetWitness: JSON.stringify(parentWitness.toJSON()),
+      currentAllReactionsCounter: currentAllReactionsCounter.toString(),
+      usersReactionsCounters: usersReactionsCounters.toString(),
+      targetsReactionsCounters: targetsReactionsCounters.toString(),
+      initialReactions: initialReactions.toString(),
+      latestReactions: latestReactions.toString(),
+      initialReactionState: JSON.stringify(initialReactionState),
+      reactionWitness: JSON.stringify(reactionWitness.toJSON()),
+      restorationBlockHeight: newRestorationBlockHeight.toString()
+    }
 }
 
 // ============================================================================

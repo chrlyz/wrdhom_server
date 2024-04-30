@@ -230,3 +230,40 @@ const reactionDeletionsWorker = new Worker('reactionDeletionsQueue', async job =
 }, { connection: connection, lockDuration: 600000 });
 
 // ============================================================================
+
+const reactionRestorationsWorker = new Worker('reactionRestorationsQueue', async job => {
+
+  const transition = ReactionsTransition.fromJSON(JSON.parse(job.data.proveReactionRestorationInput.transition));
+  const signature = Signature.fromBase58(job.data.proveReactionRestorationInput.signature);
+  const targets = Field(job.data.proveReactionRestorationInput.targets);
+  const postState = PostState.fromJSON(JSON.parse(job.data.proveReactionRestorationInput.postState)) as PostState;
+  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionRestorationInput.targetWitness));
+  const currentAllReactionsCounter = Field(job.data.proveReactionRestorationInput.currentAllReactionsCounter);
+  const initialReactionState = ReactionState.fromJSON(JSON.parse(job.data.proveReactionRestorationInput.initialReactionState)) as ReactionState;
+  const usersReactionsCounters = Field(job.data.proveReactionRestorationInput.usersReactionsCounters);
+  const targetsReactionsCounters = Field(job.data.proveReactionRestorationInput.targetsReactionsCounters);
+  const initialReactions = Field(job.data.proveReactionRestorationInput.initialReactions);
+  const latestReactions = Field(job.data.proveReactionRestorationInput.latestReactions);
+  const reactionWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionRestorationInput.reactionWitness));
+  const restorationBlockHeight = Field(job.data.proveReactionRestorationInput.restorationBlockHeight);
+  
+  const proof = await Reactions.proveReactionRestorationTransition(
+    transition,
+    signature,
+    targets,
+    postState,
+    targetWitness,
+    currentAllReactionsCounter,
+    usersReactionsCounters,
+    targetsReactionsCounters,
+    initialReactions,
+    latestReactions,
+    initialReactionState,
+    reactionWitness,
+    restorationBlockHeight
+  );
+  console.log('Proof created');
+
+  return {transition: JSON.stringify(transition), proof: JSON.stringify(proof.toJSON())};
+
+}, { connection: connection, lockDuration: 600000 });
