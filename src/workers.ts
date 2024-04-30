@@ -32,18 +32,22 @@ const worker = new Worker('queue', async job => {
     const postWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.provePostInput.postWitness));
     const userPostsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.provePostInput.userPostsCounterWitness));
     
-    const provePostOutput = await provePost(
-    transition,
-    signature,
-    postState,
-    initialUsersPostsCounters,
-    latestUsersPostsCounters,
-    initialPosts,
-    latestPosts,
-    postWitness,
-    userPostsCounterWitness
+    const proof = await Posts.provePostPublishingTransition(
+      transition,
+      signature,
+      postState.allPostsCounter.sub(1),
+      initialUsersPostsCounters,
+      latestUsersPostsCounters,
+      postState.userPostsCounter.sub(1),
+      userPostsCounterWitness,
+      initialPosts,
+      latestPosts,
+      postState,
+      postWitness
     );
-    return provePostOutput;
+    console.log('Proof created');
+
+    return {transition: JSON.stringify(transition), proof: JSON.stringify(proof.toJSON())};
 
   }, { connection: connection, lockDuration: 600000 });
 
@@ -65,61 +69,16 @@ const worker = new Worker('queue', async job => {
 
 const postDeletionsWorker = new Worker('postDeletionsQueue', async job => {
 
-  const transition = PostsTransition.fromJSON(JSON.parse(job.data.provePostInput.transition));
-  const signature = Signature.fromBase58(job.data.provePostInput.signature);
-  const currentAllPostsCounter = Field(job.data.provePostInput.currentAllPostsCounter);
-  const usersPostsCounters = Field(job.data.provePostInput.usersPostsCounters);
-  const initialPostState = PostState.fromJSON(JSON.parse(job.data.provePostInput.initialPostState)) as PostState;
-  const initialPosts = Field(job.data.provePostInput.initialPosts);
-  const latestPosts = Field(job.data.provePostInput.latestPosts);
-  const postWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.provePostInput.postWitness));
-  const deletionBlockHeight = Field(job.data.provePostInput.deletionBlockHeight);
+  const transition = PostsTransition.fromJSON(JSON.parse(job.data.provePostDeletionInput.transition));
+  const signature = Signature.fromBase58(job.data.provePostDeletionInput.signature);
+  const currentAllPostsCounter = Field(job.data.provePostDeletionInput.currentAllPostsCounter);
+  const usersPostsCounters = Field(job.data.provePostDeletionInput.usersPostsCounters);
+  const initialPostState = PostState.fromJSON(JSON.parse(job.data.provePostDeletionInput.initialPostState)) as PostState;
+  const initialPosts = Field(job.data.provePostDeletionInput.initialPosts);
+  const latestPosts = Field(job.data.provePostDeletionInput.latestPosts);
+  const postWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.provePostDeletionInput.postWitness));
+  const deletionBlockHeight = Field(job.data.provePostDeletionInput.deletionBlockHeight);
   
-  const provePostOutput = await provePostDeletion(
-    transition,
-    signature,
-    currentAllPostsCounter,
-    usersPostsCounters,
-    initialPosts,
-    latestPosts,
-    initialPostState,
-    postWitness,
-    deletionBlockHeight
-  );
-  return provePostOutput;
-
-}, { connection: connection, lockDuration: 600000 });
-
-// ============================================================================
-
-async function provePost(transition: PostsTransition, signature: Signature, postState: PostState,
-    initialUsersPostsCounters: Field, latestUsersPostsCounters: Field, initialPosts: Field,
-    latestPosts: Field, postWitness: MerkleMapWitness, userPostsCounterWitness: MerkleMapWitness) {
-        
-        const proof = await Posts.provePostPublishingTransition(
-          transition,
-          signature,
-          postState.allPostsCounter.sub(1),
-          initialUsersPostsCounters,
-          latestUsersPostsCounters,
-          postState.userPostsCounter.sub(1),
-          userPostsCounterWitness,
-          initialPosts,
-          latestPosts,
-          postState,
-          postWitness
-        );
-        console.log('Proof created');
-  
-        return {transition: JSON.stringify(transition), proof: JSON.stringify(proof.toJSON())};
-  }
-
-// ============================================================================
-
-async function provePostDeletion(transition: PostsTransition, signature: Signature,
-currentAllPostsCounter: Field, usersPostsCounters: Field, initialPosts: Field, latestPosts: Field,
-initialPostState: PostState, postWitness: MerkleMapWitness, deletionBlockHeight: Field
-) {
   const proof = await Posts.provePostDeletionTransition(
     transition,
     signature,
@@ -134,6 +93,38 @@ initialPostState: PostState, postWitness: MerkleMapWitness, deletionBlockHeight:
   console.log('Proof created');
 
   return {transition: JSON.stringify(transition), proof: JSON.stringify(proof.toJSON())};
-}
+
+}, { connection: connection, lockDuration: 600000 });
+
+// ============================================================================
+
+const postRestorationsWorker = new Worker('postRestorationsQueue', async job => {
+
+  const transition = PostsTransition.fromJSON(JSON.parse(job.data.inputs.transition));
+  const signature = Signature.fromBase58(job.data.inputs.signature);
+  const currentAllPostsCounter = Field(job.data.inputs.currentAllPostsCounter);
+  const usersPostsCounters = Field(job.data.inputs.usersPostsCounters);
+  const initialPostState = PostState.fromJSON(JSON.parse(job.data.inputs.initialPostState)) as PostState;
+  const initialPosts = Field(job.data.inputs.initialPosts);
+  const latestPosts = Field(job.data.inputs.latestPosts);
+  const postWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.inputs.postWitness));
+  const restorationBlockHeight = Field(job.data.inputs.restorationBlockHeight);
+  
+  const proof = await Posts.provePostRestorationTransition(
+    transition,
+    signature,
+    currentAllPostsCounter,
+    usersPostsCounters,
+    initialPosts,
+    latestPosts,
+    initialPostState,
+    postWitness,
+    restorationBlockHeight
+  );
+  console.log('Proof created');
+
+  return {transition: JSON.stringify(transition), proof: JSON.stringify(proof.toJSON())};
+
+}, { connection: connection, lockDuration: 600000 });
 
 // ============================================================================

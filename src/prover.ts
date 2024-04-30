@@ -42,6 +42,8 @@ const mergingQueue = new Queue('mergingQueue', {connection});
 const mergingQueueEvents = new QueueEvents('mergingQueue', {connection});
 const postDeletionsQueue = new Queue('postDeletionsQueue', {connection});
 const postDeletionsQueueEvents = new QueueEvents('postDeletionsQueue', {connection});
+const postRestorationsQueue = new Queue('postRestorationsQueue', {connection});
+const postRestorationsQueueEvents = new QueueEvents('postRestorationsQueue', {connection});
 
 // Load keys, and set up network and smart contract
 
@@ -870,7 +872,7 @@ while (true) {
       for (const provePostDeletionInput of provePostDeletionInputs) {
         const job = await postDeletionsQueue.add(
           `job`,
-          { provePostInput: provePostDeletionInput }
+          { provePostDeletionInput: provePostDeletionInput }
         );
         jobsPromises.push(job.waitUntilFinished(postDeletionsQueueEvents));
       }
@@ -988,7 +990,7 @@ while (true) {
   }  else if (provingTurn === provingPostRestorations) {
 
     const pendingRestorations = await prisma.postRestorations.findMany({
-      take: 1,
+      take: 3,
       orderBy: {
           allRestorationsCounter: 'asc'
       },
@@ -1006,10 +1008,17 @@ while (true) {
       console.log(restorationBlockHeight);
 
       const currentAllPostsCounter = await prisma.posts.count();
-    
-      const transitionsAndProofs: {
-        transition: PostsTransition,
-        proof: PostsProof
+
+      const inputs: {
+        transition: string,
+        signature: string,
+        currentAllPostsCounter: string,
+        usersPostsCounters: string,
+        initialPosts: string,
+        latestPosts: string,
+        initialPostState: string,
+        postWitness: string,
+        restorationBlockHeight: string
       }[] = [];
     
       for (const pRestoration of pendingRestorations) {
@@ -1020,7 +1029,7 @@ while (true) {
           }
         });
 
-        const result = await proveRestoration(
+        const result = await generatePostRestorationInputs(
           target!.posterAddress,
           target!.postContentID,
           target!.allPostsCounter,
@@ -1033,13 +1042,44 @@ while (true) {
           Field(restorationBlockHeight),
           Field(currentAllPostsCounter)
         );
-    
-        transitionsAndProofs.push(result);
+
+        inputs.push(result);
       }
 
-      if (transitionsAndProofs.length !== 0) {
-        await updatePostsOnChainState(transitionsAndProofs);
+      const jobsPromises: Promise<any>[] = [];
+
+      for (const input of inputs) {
+        const job = await postRestorationsQueue.add(
+          `job`,
+          { inputs: input }
+        );
+        jobsPromises.push(job.waitUntilFinished(postRestorationsQueueEvents));
+      }
+  
+      const transitionsAndProofsAsStrings: {
+        transition: string;
+        proof: string;
+      }[] = await Promise.all(jobsPromises);
     
+      const transitionsAndProofs: {
+        transition: PostsTransition,
+        proof: PostsProof
+      }[] = [];
+    
+      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+        transitionsAndProofs.push({
+          transition: PostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
+          proof: PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+        });
+      });
+  
+      endTime = performance.now();
+      console.log(`${(endTime - startTime)/1000/60} minutes`);
+
+
+      if (transitionsAndProofs.length !== 0) {
+        startTime = performance.now();
+        await updatePostsOnChainState(transitionsAndProofs);
         endTime = performance.now();
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
@@ -2682,7 +2722,7 @@ async function generatePostDeletionInputs(posterAddressBase58: string,
 
 // ============================================================================
 
-async function proveRestoration(posterAddressBase58: string,
+async function generatePostRestorationInputs(posterAddressBase58: string,
   postCID: string, allPostsCounter: bigint, userPostsCounter: bigint,
   postBlockHeight: bigint, deletionBlockHeight: bigint, restorationBlockHeight: bigint,
   postKey: Field, signatureBase58: string, newRestorationBlockHeight: Field,
@@ -2730,21 +2770,18 @@ async function proveRestoration(posterAddressBase58: string,
         newRestorationBlockHeight
       );
       console.log('Transition created');
-      
-      const proof = await Posts.provePostRestorationTransition(
-        transition,
-        signature,
-        currentAllPostsCounter,
-        usersPostsCounters,
-        initialPosts,
-        latestPosts,
-        initialPostState,
-        postWitness,
-        newRestorationBlockHeight
-      );
-      console.log('Proof created');
 
-      return {transition: transition, proof: proof};
+      return {
+        transition: JSON.stringify(transition),
+        signature: signatureBase58,
+        currentAllPostsCounter: currentAllPostsCounter.toString(),
+        usersPostsCounters: usersPostsCounters.toString(),
+        initialPosts: initialPosts.toString(),
+        latestPosts: latestPosts.toString(),
+        initialPostState: JSON.stringify(initialPostState),
+        postWitness: JSON.stringify(postWitness.toJSON()),
+        restorationBlockHeight: newRestorationBlockHeight.toString()
+      }
 }
 
 // ============================================================================
