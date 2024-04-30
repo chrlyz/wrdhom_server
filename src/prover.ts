@@ -40,6 +40,8 @@ const queue = new Queue('queue', {connection});
 const queueEvents = new QueueEvents('queue', {connection});
 const mergingQueue = new Queue('mergingQueue', {connection});
 const mergingQueueEvents = new QueueEvents('mergingQueue', {connection});
+const postDeletionsQueue = new Queue('postDeletionsQueue', {connection});
+const postDeletionsQueueEvents = new QueueEvents('postDeletionsQueue', {connection});
 
 // Load keys, and set up network and smart contract
 
@@ -808,7 +810,7 @@ while (true) {
   } else if (provingTurn === provingPostDeletions) {
 
     const pendingDeletions = await prisma.postDeletions.findMany({
-      take: 1,
+      take: 3,
       orderBy: {
           allDeletionsCounter: 'asc'
       },
@@ -826,10 +828,17 @@ while (true) {
       console.log(deletionBlockHeight);
 
       const currentAllPostsCounter = await prisma.posts.count();
-    
-      const transitionsAndProofs: {
-        transition: PostsTransition,
-        proof: PostsProof
+
+      const provePostDeletionInputs: {
+        transition: string,
+        signature: string,
+        currentAllPostsCounter: string,
+        usersPostsCounters: string,
+        initialPosts: string,
+        latestPosts: string,
+        initialPostState: string,
+        postWitness: string,
+        deletionBlockHeight: string
       }[] = [];
     
       for (const pDeletion of pendingDeletions) {
@@ -840,7 +849,7 @@ while (true) {
           }
         });
 
-        const result = await provePostDeletion(
+        const result = await generatePostDeletionInputs(
           target!.posterAddress,
           target!.postContentID,
           target!.allPostsCounter,
@@ -852,13 +861,43 @@ while (true) {
           Field(deletionBlockHeight),
           Field(currentAllPostsCounter)
         );
-    
-        transitionsAndProofs.push(result);
+
+        provePostDeletionInputs.push(result);
       }
 
-      if (transitionsAndProofs.length !== 0) {
-        await updatePostsOnChainState(transitionsAndProofs);
+      const jobsPromises: Promise<any>[] = [];
+
+      for (const provePostDeletionInput of provePostDeletionInputs) {
+        const job = await postDeletionsQueue.add(
+          `job`,
+          { provePostInput: provePostDeletionInput }
+        );
+        jobsPromises.push(job.waitUntilFinished(postDeletionsQueueEvents));
+      }
+  
+      const transitionsAndProofsAsStrings: {
+        transition: string;
+        proof: string;
+      }[] = await Promise.all(jobsPromises);
     
+      const transitionsAndProofs: {
+        transition: PostsTransition,
+        proof: PostsProof
+      }[] = [];
+    
+      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+        transitionsAndProofs.push({
+          transition: PostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
+          proof: PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+        });
+      });
+  
+      endTime = performance.now();
+      console.log(`${(endTime - startTime)/1000/60} minutes`);
+
+      if (transitionsAndProofs.length !== 0) {
+        startTime = performance.now();
+        await updatePostsOnChainState(transitionsAndProofs);
         endTime = performance.now();
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
@@ -2579,7 +2618,7 @@ async function updateRepostsOnChainState(transitionsAndProofs: {
 
 // ============================================================================
 
-async function provePostDeletion(posterAddressBase58: string,
+async function generatePostDeletionInputs(posterAddressBase58: string,
   postCID: string, allPostsCounter: bigint, userPostsCounter: bigint,
   postBlockHeight: bigint, restorationBlockHeight: bigint,
   postKey: Field, signatureBase58: string, deletionBlockHeight: Field,
@@ -2627,21 +2666,18 @@ async function provePostDeletion(posterAddressBase58: string,
         deletionBlockHeight
       );
       console.log('Transition created');
-      
-      const proof = await Posts.provePostDeletionTransition(
-        transition,
-        signature,
-        currentAllPostsCounter,
-        usersPostsCounters,
-        initialPosts,
-        latestPosts,
-        initialPostState,
-        postWitness,
-        deletionBlockHeight
-      );
-      console.log('Proof created');
 
-      return {transition: transition, proof: proof};
+      return {
+        transition: JSON.stringify(transition),
+        signature: signatureBase58,
+        currentAllPostsCounter: currentAllPostsCounter.toString(),
+        usersPostsCounters: usersPostsCounters.toString(),
+        initialPosts: initialPosts.toString(),
+        latestPosts: latestPosts.toString(),
+        initialPostState: JSON.stringify(initialPostState),
+        postWitness: JSON.stringify(postWitness.toJSON()),
+        deletionBlockHeight: deletionBlockHeight.toString()
+      }
 }
 
 // ============================================================================
