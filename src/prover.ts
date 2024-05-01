@@ -52,6 +52,10 @@ const reactionDeletionsQueue = new Queue('reactionDeletionsQueue', {connection})
 const reactionDeletionsQueueEvents = new QueueEvents('reactionDeletionsQueue', {connection});
 const reactionRestorationsQueue = new Queue('reactionRestorationsQueue', {connection});
 const reactionRestorationsQueueEvents = new QueueEvents('reactionRestorationsQueue', {connection});
+const commentsQueue = new Queue('commentsQueue', {connection});
+const commentsQueueEvents = new QueueEvents('commentsQueue', {connection});
+const mergingCommentsQueue = new Queue('mergingCommentsQueue', {connection});
+const mergingCommentsQueueEvents = new QueueEvents('mergingCommentsQueue', {connection});
 
 
 // Load keys, and set up network and smart contract
@@ -560,7 +564,7 @@ while (true) {
   } else if (provingTurn === provingComments) {
 
     const pendingComments = await prisma.comments.findMany({
-      take: 1,
+      take: 3,
       orderBy: {
           allCommentsCounter: 'asc'
       },
@@ -578,14 +582,27 @@ while (true) {
       const lastBlock = await fetchLastBlock(configComments.url);
       const commentBlockHeight = lastBlock.blockchainLength.toBigint();
       console.log(commentBlockHeight);
-    
-      const transitionsAndProofs: {
-        transition: CommentsTransition,
-        proof: CommentsProof
-      }[] = [];
+
+      const proveCommentInputs: {
+        transition: string,
+        signature: string,
+        targets: string,
+        postState: string,
+        targetWitness: string,
+        commentState: string,
+        initialUsersCommentsCounters: string,
+        latestUsersCommentsCounters: string,
+        userCommentsCounterWitness: string,
+        initialTargetsCommentsCounters: string,
+        latestTargetsCommentsCounters: string,
+        targetCommentsCounterWitness: string,
+        initialComments: string,
+        latestComments: string,
+        commentWitness: string
+      }[] = []
     
       for (const pComment of pendingComments) {
-        const result = await proveComment(
+        const result = await generateProveCommentInputs(
           pComment.isTargetPost,
           pComment.targetKey,
           pComment.commenterAddress,
@@ -599,12 +616,42 @@ while (true) {
           pComment.commentSignature
         );
     
-        transitionsAndProofs.push(result);
+        proveCommentInputs.push(result);
       }
+
+      const jobsPromises: Promise<any>[] = [];
+
+      for (const proveCommentInput of proveCommentInputs) {
+        const job = await commentsQueue.add(
+          `job`,
+          { proveCommentInput: proveCommentInput }
+        );
+        jobsPromises.push(job.waitUntilFinished(commentsQueueEvents));
+      }
+  
+      const transitionsAndProofsAsStrings: {
+        transition: string;
+        proof: string;
+      }[] = await Promise.all(jobsPromises);
+    
+      const transitionsAndProofs: {
+        transition: CommentsTransition,
+        proof: CommentsProof
+      }[] = [];
+    
+      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+        transitionsAndProofs.push({
+          transition: CommentsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
+          proof: CommentsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+        });
+      });
+  
+      endTime = performance.now();
+      console.log(`${(endTime - startTime)/1000/60} minutes`);
     
       if (transitionsAndProofs.length !== 0) {
+        startTime = performance.now();
         await updateCommentsOnChainState(transitionsAndProofs);
-    
         endTime = performance.now();
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
@@ -2362,7 +2409,6 @@ async function updatePostsOnChainState(transitionsAndProofs: PostTransitionAndPr
           if (i + 1 < transitionsAndProofs.length) {
             mergedTransitionsAndProofs.push(mergeTransitionsAndProofs(transitionsAndProofs[i], transitionsAndProofs[i+1]));
           } else {
-            const x = Promise.resolve(transitionsAndProofs[i])
             mergedTransitionsAndProofs.push(Promise.resolve({
               transition: JSON.stringify(transitionsAndProofs[i].transition),
               proof: JSON.stringify(transitionsAndProofs[i].proof.toJSON())
@@ -2534,7 +2580,6 @@ async function updateReactionsOnChainState(transitionsAndProofs: ReactionTransit
           if (i + 1 < transitionsAndProofs.length) {
             mergedTransitionsAndProofs.push(mergeTransitionsAndProofs(transitionsAndProofs[i], transitionsAndProofs[i+1]));
           } else {
-            const x = Promise.resolve(transitionsAndProofs[i])
             mergedTransitionsAndProofs.push(Promise.resolve({
               transition: JSON.stringify(transitionsAndProofs[i].transition),
               proof: JSON.stringify(transitionsAndProofs[i].proof.toJSON())
@@ -2576,7 +2621,7 @@ async function updateReactionsOnChainState(transitionsAndProofs: ReactionTransit
 
 // ============================================================================
 
-async function proveComment(isTargetPost: boolean, targetKey: string,
+async function generateProveCommentInputs(isTargetPost: boolean, targetKey: string,
   commenterAddressBase58: string, commentContentID: string,
   allCommentsCounter: bigint, userCommentsCounter: bigint,
   targetCommentsCounter: bigint, commentBlockHeight: bigint,
@@ -2656,43 +2701,84 @@ async function proveComment(isTargetPost: boolean, targetKey: string,
     commentState
   );
   console.log('Transition created');
-  
-  const proof = await Comments.proveCommentPublishingTransition(
-    transition,
-    signature,
-    postsMap.getRoot(),
-    postState,
-    targetWitness,
-    commentState.allCommentsCounter.sub(1),
-    initialUsersCommentsCounters,
-    latestUsersCommentsCounters,
-    commentState.userCommentsCounter.sub(1),
-    userCommentsCounterWitness,
-    initialTargetsCommentsCounters,
-    latestTargetsCommentsCounters,
-    commentState.targetCommentsCounter.sub(1),
-    targetCommentsCounterWitness,
-    initialComments,
-    latestComments,
-    commentWitness,
-    commentState
-  );
-  console.log('Proof created');
 
-  return {transition: transition, proof: proof};
+  return {
+    transition: JSON.stringify(transition),
+    signature: signatureBase58,
+    targets: postsMap.getRoot().toString(),
+    postState: JSON.stringify(postState),
+    targetWitness: JSON.stringify(targetWitness.toJSON()),
+    commentState: JSON.stringify(commentState),
+    initialUsersCommentsCounters: initialUsersCommentsCounters.toString(),
+    latestUsersCommentsCounters: latestUsersCommentsCounters.toString(),
+    userCommentsCounterWitness: JSON.stringify(userCommentsCounterWitness.toJSON()),
+    initialTargetsCommentsCounters: initialTargetsCommentsCounters.toString(),
+    latestTargetsCommentsCounters: latestTargetsCommentsCounters.toString(),
+    targetCommentsCounterWitness: JSON.stringify(targetCommentsCounterWitness.toJSON()),
+    initialComments: initialComments.toString(),
+    latestComments: latestComments.toString(),
+    commentWitness: JSON.stringify(commentWitness.toJSON())
+  }
 }
 
 // ============================================================================
 
-async function updateCommentsOnChainState(transitionsAndProofs: {
+type CommentTransitionAndProof = {
   transition: CommentsTransition,
   proof: CommentsProof
-}[]) {
+}
+
+async function updateCommentsOnChainState(transitionsAndProofs: CommentTransitionAndProof[]) {
+
+  async function mergeTransitionsAndProofs(tp1: CommentTransitionAndProof, tp2: CommentTransitionAndProof) {
+    const mergedTransition = CommentsTransition.mergeCommentsTransitions(tp1.transition, tp2.transition);
+    const job = await mergingCommentsQueue.add(
+      `job`,
+      { mergedTransition: JSON.stringify(mergedTransition),
+        proof1: JSON.stringify(tp1.proof.toJSON()),
+        proof2: JSON.stringify(tp2.proof.toJSON())
+      }
+    );
+    return job.waitUntilFinished(mergingCommentsQueueEvents);
+  }
+
+  async function recursiveMerge(transitionsAndProofs: CommentTransitionAndProof[]): Promise<CommentTransitionAndProof> {
+      if (transitionsAndProofs.length === 1) {
+          return transitionsAndProofs[0];
+      }
+
+      const mergedTransitionsAndProofs = [];
+      for (let i = 0; i < transitionsAndProofs.length; i += 2) {
+          if (i + 1 < transitionsAndProofs.length) {
+            mergedTransitionsAndProofs.push(mergeTransitionsAndProofs(transitionsAndProofs[i], transitionsAndProofs[i+1]));
+          } else {
+            mergedTransitionsAndProofs.push(Promise.resolve({
+              transition: JSON.stringify(transitionsAndProofs[i].transition),
+              proof: JSON.stringify(transitionsAndProofs[i].proof.toJSON())
+            }));
+          }
+      }
+      const processedMergedTransitionsAndProofs:{
+        transition: string;
+        proof: string;
+      }[] = await Promise.all(mergedTransitionsAndProofs);
+      const processedMergedTransitionsAndProofsCasted: CommentTransitionAndProof[] = [];
+      processedMergedTransitionsAndProofs.forEach(transitionAndProof => {
+        processedMergedTransitionsAndProofsCasted.push({
+          transition: CommentsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
+          proof: CommentsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+        });
+      });
+      return recursiveMerge(processedMergedTransitionsAndProofsCasted);
+  }
+
+  const result = await recursiveMerge(transitionsAndProofs);
+  
   let sentTxn;
   const txn = await Mina.transaction(
     { sender: feepayerAddress, fee: fee },
     () => {
-      commentsContract.update(transitionsAndProofs[0].proof);
+      commentsContract.update(result.proof);
     }
   );
   await txn.prove();
