@@ -1,6 +1,7 @@
 import { Signature, Field, MerkleMapWitness } from 'o1js';
 import { PostState, PostsTransition, Posts, PostsProof,
-  Reactions, ReactionState, ReactionsTransition, ReactionsProof } from 'wrdhom';
+  Reactions, ReactionState, ReactionsTransition, ReactionsProof,
+Comments, CommentState, CommentsTransition, CommentsProof } from 'wrdhom';
 import { Worker } from 'bullmq';
 import * as dotenv from 'dotenv';
 
@@ -17,6 +18,8 @@ console.log('Compiling Posts ZkProgram...');
 await Posts.compile();
 console.log('Compiling Reactions ZkProgram...');
 await Reactions.compile();
+console.log('Compiling Comments ZkProgram...');
+await Comments.compile();
 console.log('Compiled');
 const endTime = performance.now();
 console.log(`${(endTime - startTime)/1000/60} minutes`);
@@ -265,5 +268,66 @@ const reactionRestorationsWorker = new Worker('reactionRestorationsQueue', async
   console.log('Proof created');
 
   return {transition: JSON.stringify(transition), proof: JSON.stringify(proof.toJSON())};
+
+}, { connection: connection, lockDuration: 600000 });
+
+// ============================================================================
+
+const commentsQueueWorker = new Worker('commentsQueue', async job => {
+
+  const transition = CommentsTransition.fromJSON(JSON.parse(job.data.proveCommentInput.transition));
+  const signature = Signature.fromBase58(job.data.proveCommentInput.signature);
+  const targets = Field(job.data.proveCommentInput.targets);
+  const postState = PostState.fromJSON(JSON.parse(job.data.proveCommentInput.postState)) as PostState;
+  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentInput.targetWitness));
+  const commentState = CommentState.fromJSON(JSON.parse(job.data.proveCommentInput.commentState)) as CommentState;
+  const initialUsersCommentsCounters = Field(job.data.proveCommentInput.initialUsersCommentsCounters);
+  const latestUsersCommentsCounters = Field(job.data.proveCommentInput.latestUsersCommentsCounters);
+  const userCommentsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentInput.userCommentsCounterWitness));
+  const initialTargetsCommentsCounters = Field(job.data.proveCommentInput.initialTargetsCommentsCounters);
+  const latestTargetsCommentsCounters = Field(job.data.proveCommentInput.latestTargetsCommentsCounters);
+  const targetCommentsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentInput.targetCommentsCounterWitness));
+  const initialComments = Field(job.data.proveCommentInput.initialComments);
+  const latestComments = Field(job.data.proveCommentInput.latestComments);
+  const commentWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentInput.commentWitness));
+
+  
+  const proof = await Comments.proveCommentPublishingTransition(
+    transition,
+    signature,
+    targets,
+    postState,
+    targetWitness,
+    commentState.allCommentsCounter.sub(1),
+    initialUsersCommentsCounters,
+    latestUsersCommentsCounters,
+    commentState.userCommentsCounter.sub(1),
+    userCommentsCounterWitness,
+    initialTargetsCommentsCounters,
+    latestTargetsCommentsCounters,
+    commentState.targetCommentsCounter.sub(1),
+    targetCommentsCounterWitness,
+    initialComments,
+    latestComments,
+    commentWitness,
+    commentState
+  );
+  console.log('Proof created');
+
+  return {transition: JSON.stringify(transition), proof: JSON.stringify(proof.toJSON())};
+
+}, { connection: connection, lockDuration: 600000 });
+
+// ============================================================================
+
+const mergingCommentsWorker = new Worker('mergingCommentsQueue', async job => {
+
+  const mergedTransition = CommentsTransition.fromJSON(JSON.parse(job.data.mergedTransition));
+  const proof1 = CommentsProof.fromJSON(JSON.parse(job.data.proof1));
+  const proof2 = CommentsProof.fromJSON(JSON.parse(job.data.proof2));
+
+  const proof = await Comments.proveMergedCommentsTransitions(mergedTransition, proof1, proof2);
+  console.log('Merged proof created');
+  return {transition: JSON.stringify(mergedTransition), proof: JSON.stringify(proof.toJSON()) }
 
 }, { connection: connection, lockDuration: 600000 });
