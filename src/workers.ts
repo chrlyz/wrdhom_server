@@ -370,3 +370,42 @@ const commentDeletionsWorker = new Worker('commentDeletionsQueue', async job => 
   return {transition: JSON.stringify(transition), proof: JSON.stringify(proof.toJSON())};
 
 }, { connection: connection, lockDuration: 600000 });
+
+// ============================================================================
+
+const commentRestorationsWorker = new Worker('commentRestorationsQueue', async job => {
+
+  const transition = CommentsTransition.fromJSON(JSON.parse(job.data.proveCommentRestorationInput.transition));
+  const signature = Signature.fromBase58(job.data.proveCommentRestorationInput.signature);
+  const targets = Field(job.data.proveCommentRestorationInput.targets);
+  const postState = PostState.fromJSON(JSON.parse(job.data.proveCommentRestorationInput.postState)) as PostState;
+  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentRestorationInput.targetWitness));
+  const currentAllCommentsCounter = Field(job.data.proveCommentRestorationInput.currentAllCommentsCounter);
+  const initialCommentState = CommentState.fromJSON(JSON.parse(job.data.proveCommentRestorationInput.initialCommentState)) as CommentState;
+  const usersCommentsCounters = Field(job.data.proveCommentRestorationInput.usersCommentsCounters);
+  const targetsCommentsCounters = Field(job.data.proveCommentRestorationInput.targetsCommentsCounters);
+  const initialComments = Field(job.data.proveCommentRestorationInput.initialComments);
+  const latestComments = Field(job.data.proveCommentRestorationInput.latestComments);
+  const commentWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentRestorationInput.commentWitness));
+  const restorationBlockHeight = Field(job.data.proveCommentRestorationInput.restorationBlockHeight);
+  
+  const proof = await Comments.proveCommentRestorationTransition(
+    transition,
+    signature,
+    targets,
+    postState,
+    targetWitness,
+    currentAllCommentsCounter,
+    usersCommentsCounters,
+    targetsCommentsCounters,
+    initialComments,
+    latestComments,
+    initialCommentState,
+    commentWitness,
+    restorationBlockHeight
+  );
+  console.log('Proof created');
+
+  return {transition: JSON.stringify(transition), proof: JSON.stringify(proof.toJSON())};
+
+}, { connection: connection, lockDuration: 600000 });

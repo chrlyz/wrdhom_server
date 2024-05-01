@@ -58,6 +58,8 @@ const mergingCommentsQueue = new Queue('mergingCommentsQueue', {connection});
 const mergingCommentsQueueEvents = new QueueEvents('mergingCommentsQueue', {connection});
 const commentDeletionsQueue = new Queue('commentDeletionsQueue', {connection});
 const commentDeletionsQueueEvents = new QueueEvents('commentDeletionsQueue', {connection});
+const commentRestorationsQueue = new Queue('commentRestorationsQueue', {connection});
+const commentRestorationsQueueEvents = new QueueEvents('commentRestorationsQueue', {connection});
 
 
 // Load keys, and set up network and smart contract
@@ -1473,7 +1475,7 @@ while (true) {
   } else if (provingTurn === provingCommentRestorations) {
 
     const pendingCommentRestorations = await prisma.commentRestorations.findMany({
-      take: 1,
+      take: 3,
       orderBy: {
           allRestorationsCounter: 'asc'
       },
@@ -1491,10 +1493,21 @@ while (true) {
       console.log(restorationBlockHeight);
 
       const currentAllCommentsCounter = await prisma.comments.count();
-    
-      const transitionsAndProofs: {
-        transition: CommentsTransition,
-        proof: CommentsProof
+
+      const proveCommentRestorationInputs: {
+        transition: string,
+        signature: string,
+        targets: string,
+        postState: string,
+        targetWitness: string,
+        currentAllCommentsCounter: string,
+        usersCommentsCounters: string,
+        targetsCommentsCounters: string,
+        initialComments: string,
+        latestComments: string,
+        initialCommentState: string,
+        commentWitness: string,
+        restorationBlockHeight: string
       }[] = [];
     
       for (const pRestoration of pendingCommentRestorations) {
@@ -1511,7 +1524,7 @@ while (true) {
           }
         });
 
-        const result = await proveCommentRestoration(
+        const result = await generateProveCommentRestorationInputs(
           parent,
           comment!.isTargetPost,
           comment!.targetKey,
@@ -1529,12 +1542,42 @@ while (true) {
           Field(currentAllCommentsCounter)
         );
     
-        transitionsAndProofs.push(result);
+        proveCommentRestorationInputs.push(result);
       }
 
-      if (transitionsAndProofs.length !== 0) {
-        await updateCommentsOnChainState(transitionsAndProofs);
+      const jobsPromises: Promise<any>[] = [];
+
+      for (const proveCommentRestorationInput of proveCommentRestorationInputs) {
+        const job = await commentRestorationsQueue.add(
+          `job`,
+          { proveCommentRestorationInput: proveCommentRestorationInput }
+        );
+        jobsPromises.push(job.waitUntilFinished(commentRestorationsQueueEvents));
+      }
+  
+      const transitionsAndProofsAsStrings: {
+        transition: string;
+        proof: string;
+      }[] = await Promise.all(jobsPromises);
     
+      const transitionsAndProofs: {
+        transition: CommentsTransition,
+        proof: CommentsProof
+      }[] = [];
+    
+      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+        transitionsAndProofs.push({
+          transition: CommentsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
+          proof: CommentsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+        });
+      });
+  
+      endTime = performance.now();
+      console.log(`${(endTime - startTime)/1000/60} minutes`);
+
+      if (transitionsAndProofs.length !== 0) {
+        startTime = performance.now();
+        await updateCommentsOnChainState(transitionsAndProofs);
         endTime = performance.now();
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
@@ -3192,7 +3235,7 @@ async function generateProveCommentDeletionInputs(parent: {
 
 // ============================================================================
 
-async function proveCommentRestoration(parent: {
+async function generateProveCommentRestorationInputs(parent: {
   postKey: string;
   posterAddress: string;
   postContentID: string;
@@ -3273,25 +3316,22 @@ const commentCIDAsCircuitString = CircuitString.fromString(commentCID.toString()
       newRestorationBlockHeight
     );
     console.log('Transition created');
-    
-    const proof = await Comments.proveCommentRestorationTransition(
-      transition,
-      signature,
-      currentPosts,
-      parentState,
-      parentWitness,
-      currentAllCommentsCounter,
-      usersCommentsCounters,
-      targetsCommentsCounters,
-      initialComments,
-      latestComments,
-      initialCommentState,
-      commentWitness,
-      newRestorationBlockHeight
-    );
-    console.log('Proof created');
 
-    return {transition: transition, proof: proof};
+    return {
+      transition: JSON.stringify(transition),
+      signature: signatureBase58,
+      targets: currentPosts.toString(),
+      postState: JSON.stringify(parentState),
+      targetWitness: JSON.stringify(parentWitness.toJSON()),
+      currentAllCommentsCounter: currentAllCommentsCounter.toString(),
+      usersCommentsCounters: usersCommentsCounters.toString(),
+      targetsCommentsCounters: targetsCommentsCounters.toString(),
+      initialComments: initialComments.toString(),
+      latestComments: latestComments.toString(),
+      initialCommentState: JSON.stringify(initialCommentState),
+      commentWitness: JSON.stringify(commentWitness.toJSON()),
+      restorationBlockHeight: newRestorationBlockHeight.toString()
+    }
 }
   
 // ============================================================================
