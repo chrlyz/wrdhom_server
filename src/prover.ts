@@ -66,6 +66,8 @@ const mergingRepostsQueue = new Queue('mergingRepostsQueue', {connection});
 const mergingRepostsQueueEvents = new QueueEvents('mergingRepostsQueue', {connection});
 const repostDeletionsQueue = new Queue('repostDeletionsQueue', {connection});
 const repostDeletionsQueueEvents = new QueueEvents('repostDeletionsQueue', {connection});
+const repostRestorationsQueue = new Queue('repostRestorationsQueue', {connection});
+const repostRestorationsQueueEvents = new QueueEvents('repostRestorationsQueue', {connection});
 
 
 // Load keys, and set up network and smart contract
@@ -1925,7 +1927,7 @@ while (true) {
   } else if (provingTurn === provingRepostRestorations) {
 
     const pendingRepostRestorations = await prisma.repostRestorations.findMany({
-      take: 1,
+      take: 3,
       orderBy: {
           allRestorationsCounter: 'asc'
       },
@@ -1943,10 +1945,21 @@ while (true) {
       console.log(restorationBlockHeight);
 
       const currentAllRepostsCounter = await prisma.reposts.count();
-    
-      const transitionsAndProofs: {
-        transition: RepostsTransition,
-        proof: RepostsProof
+
+      const proveRepostRestorationInputs: {
+        transition: string,
+        signature: string,
+        targets: string,
+        postState: string,
+        targetWitness: string,
+        currentAllRepostsCounter: string,
+        usersRepostsCounters: string,
+        targetsRepostsCounters: string,
+        initialReposts: string,
+        latestReposts: string,
+        initialRepostState: string,
+        repostWitness: string,
+        restorationBlockHeight: string
       }[] = [];
     
       for (const pRestoration of pendingRepostRestorations) {
@@ -1963,7 +1976,7 @@ while (true) {
           }
         });
 
-        const result = await proveRepostRestoration(
+        const result = await generateProveRepostRestoration(
           parent,
           repost!.isTargetPost,
           repost!.targetKey,
@@ -1980,12 +1993,42 @@ while (true) {
           Field(currentAllRepostsCounter)
         );
     
-        transitionsAndProofs.push(result);
+        proveRepostRestorationInputs.push(result);
       }
 
-      if (transitionsAndProofs.length !== 0) {
-        await updateRepostsOnChainState(transitionsAndProofs);
+      const jobsPromises: Promise<any>[] = [];
+
+      for (const proveRepostRestorationInput of proveRepostRestorationInputs) {
+        const job = await repostRestorationsQueue.add(
+          `job`,
+          { proveRepostRestorationInput: proveRepostRestorationInput }
+        );
+        jobsPromises.push(job.waitUntilFinished(repostRestorationsQueueEvents));
+      }
+  
+      const transitionsAndProofsAsStrings: {
+        transition: string;
+        proof: string;
+      }[] = await Promise.all(jobsPromises);
     
+      const transitionsAndProofs: {
+        transition: RepostsTransition,
+        proof: RepostsProof
+      }[] = [];
+    
+      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+        transitionsAndProofs.push({
+          transition: RepostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
+          proof: RepostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+        });
+      });
+  
+      endTime = performance.now();
+      console.log(`${(endTime - startTime)/1000/60} minutes`);
+
+      if (transitionsAndProofs.length !== 0) {
+        startTime = performance.now();
+        await updateRepostsOnChainState(transitionsAndProofs);
         endTime = performance.now();
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
@@ -3565,7 +3608,7 @@ const reposterAddress = PublicKey.fromBase58(reposterAddressBase58);
 
 // ============================================================================
 
-async function proveRepostRestoration(parent: {
+async function generateProveRepostRestoration(parent: {
   postKey: string;
   posterAddress: string;
   postContentID: string;
@@ -3643,25 +3686,22 @@ const reposterAddress = PublicKey.fromBase58(reposterAddressBase58);
       newRestorationBlockHeight
     );
     console.log('Transition created');
-    
-    const proof = await Reposts.proveRepostRestorationTransition(
-      transition,
-      signature,
-      currentPosts,
-      parentState,
-      parentWitness,
-      currentAllRepostsCounter,
-      usersRepostsCounters,
-      targetsRepostsCounters,
-      initialReposts,
-      latestReposts,
-      initialRepostState,
-      repostWitness,
-      newRestorationBlockHeight
-    );
-    console.log('Proof created');
 
-    return {transition: transition, proof: proof};
+    return {
+      transition: JSON.stringify(transition),
+      signature: signatureBase58,
+      targets: currentPosts.toString(),
+      postState: JSON.stringify(parentState),
+      targetWitness: JSON.stringify(parentWitness.toJSON()),
+      currentAllRepostsCounter: currentAllRepostsCounter.toString(),
+      usersRepostsCounters: usersRepostsCounters.toString(),
+      targetsRepostsCounters: targetsRepostsCounters.toString(),
+      initialReposts: initialReposts.toString(),
+      latestReposts: latestReposts.toString(),
+      initialRepostState: JSON.stringify(initialRepostState),
+      repostWitness: JSON.stringify(repostWitness.toJSON()),
+      restorationBlockHeight: newRestorationBlockHeight.toString()
+    }
 }
 
 // ============================================================================
