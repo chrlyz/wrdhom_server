@@ -64,6 +64,8 @@ const repostsQueue = new Queue('repostsQueue', {connection});
 const repostsQueueEvents = new QueueEvents('repostsQueue', {connection});
 const mergingRepostsQueue = new Queue('mergingRepostsQueue', {connection});
 const mergingRepostsQueueEvents = new QueueEvents('mergingRepostsQueue', {connection});
+const repostDeletionsQueue = new Queue('repostDeletionsQueue', {connection});
+const repostDeletionsQueueEvents = new QueueEvents('repostDeletionsQueue', {connection});
 
 
 // Load keys, and set up network and smart contract
@@ -1725,7 +1727,7 @@ while (true) {
   } else if (provingTurn === provingRepostDeletions) {
 
     const pendingRepostDeletions = await prisma.repostDeletions.findMany({
-      take: 1,
+      take: 3,
       orderBy: {
           allDeletionsCounter: 'asc'
       },
@@ -1743,10 +1745,21 @@ while (true) {
       console.log(deletionBlockHeight);
 
       const currentAllRepostsCounter = await prisma.reposts.count();
-    
-      const transitionsAndProofs: {
-        transition: RepostsTransition,
-        proof: RepostsProof
+
+      const proveRepostDeletionInputs: {
+        transition: string,
+        signature: string,
+        targets: string,
+        postState: string,
+        targetWitness: string,
+        currentAllRepostsCounter: string,
+        usersRepostsCounters: string,
+        targetsRepostsCounters: string,
+        initialReposts: string,
+        latestReposts: string,
+        initialRepostState: string,
+        repostWitness: string,
+        deletionBlockHeight: string
       }[] = [];
     
       for (const pDeletion of pendingRepostDeletions) {
@@ -1763,7 +1776,7 @@ while (true) {
           }
         });
 
-        const result = await proveRepostDeletion(
+        const result = await generateProveRepostDeletionInputs(
           parent,
           repost!.isTargetPost,
           repost!.targetKey,
@@ -1779,12 +1792,42 @@ while (true) {
           Field(currentAllRepostsCounter)
         );
     
-        transitionsAndProofs.push(result);
+        proveRepostDeletionInputs.push(result);
       }
 
-      if (transitionsAndProofs.length !== 0) {
-        await updateRepostsOnChainState(transitionsAndProofs);
+      const jobsPromises: Promise<any>[] = [];
+
+      for (const proveRepostDeletionInput of proveRepostDeletionInputs) {
+        const job = await repostDeletionsQueue.add(
+          `job`,
+          { proveRepostDeletionInput: proveRepostDeletionInput }
+        );
+        jobsPromises.push(job.waitUntilFinished(repostDeletionsQueueEvents));
+      }
+  
+      const transitionsAndProofsAsStrings: {
+        transition: string;
+        proof: string;
+      }[] = await Promise.all(jobsPromises);
     
+      const transitionsAndProofs: {
+        transition: RepostsTransition,
+        proof: RepostsProof
+      }[] = [];
+    
+      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+        transitionsAndProofs.push({
+          transition: RepostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
+          proof: RepostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+        });
+      });
+  
+      endTime = performance.now();
+      console.log(`${(endTime - startTime)/1000/60} minutes`);
+
+      if (transitionsAndProofs.length !== 0) {
+        startTime = performance.now();
+        await updateRepostsOnChainState(transitionsAndProofs);
         endTime = performance.now();
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
@@ -3424,7 +3467,7 @@ const commentCIDAsCircuitString = CircuitString.fromString(commentCID.toString()
   
 // ============================================================================
 
-async function proveRepostDeletion(parent: {
+async function generateProveRepostDeletionInputs(parent: {
   postKey: string;
   posterAddress: string;
   postContentID: string;
@@ -3502,25 +3545,22 @@ const reposterAddress = PublicKey.fromBase58(reposterAddressBase58);
       deletionBlockHeight
     );
     console.log('Transition created');
-    
-    const proof = await Reposts.proveRepostDeletionTransition(
-      transition,
-      signature,
-      currentPosts,
-      parentState,
-      parentWitness,
-      currentAllRepostsCounter,
-      usersRepostsCounters,
-      targetsRepostsCounters,
-      initialReposts,
-      latestReposts,
-      initialRepostState,
-      repostWitness,
-      deletionBlockHeight
-    );
-    console.log('Proof created');
 
-    return {transition: transition, proof: proof};
+    return {
+      transition: JSON.stringify(transition),
+      signature: signatureBase58,
+      targets: currentPosts.toString(),
+      postState: JSON.stringify(parentState),
+      targetWitness: JSON.stringify(parentWitness.toJSON()),
+      currentAllRepostsCounter: currentAllRepostsCounter.toString(),
+      usersRepostsCounters: usersRepostsCounters.toString(),
+      targetsRepostsCounters: targetsRepostsCounters.toString(),
+      initialReposts: initialReposts.toString(),
+      latestReposts: latestReposts.toString(),
+      initialRepostState: JSON.stringify(initialRepostState),
+      repostWitness: JSON.stringify(repostWitness.toJSON()),
+      deletionBlockHeight: deletionBlockHeight.toString()
+    }
 }
 
 // ============================================================================
