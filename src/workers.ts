@@ -1,7 +1,8 @@
 import { Signature, Field, MerkleMapWitness } from 'o1js';
 import { PostState, PostsTransition, Posts, PostsProof,
   Reactions, ReactionState, ReactionsTransition, ReactionsProof,
-Comments, CommentState, CommentsTransition, CommentsProof } from 'wrdhom';
+Comments, CommentState, CommentsTransition, CommentsProof,
+Reposts, RepostState, RepostsTransition, RepostsProof } from 'wrdhom';
 import { Worker } from 'bullmq';
 import * as dotenv from 'dotenv';
 
@@ -20,6 +21,8 @@ console.log('Compiling Reactions ZkProgram...');
 await Reactions.compile();
 console.log('Compiling Comments ZkProgram...');
 await Comments.compile();
+console.log('Compiling Reposts ZkProgram...');
+await Reposts.compile();
 console.log('Compiled');
 const endTime = performance.now();
 console.log(`${(endTime - startTime)/1000/60} minutes`);
@@ -409,3 +412,66 @@ const commentRestorationsWorker = new Worker('commentRestorationsQueue', async j
   return {transition: JSON.stringify(transition), proof: JSON.stringify(proof.toJSON())};
 
 }, { connection: connection, lockDuration: 600000 });
+
+// ============================================================================
+
+const repostsQueueWorker = new Worker('repostsQueue', async job => {
+
+  const transition = RepostsTransition.fromJSON(JSON.parse(job.data.proveRepostInput.transition));
+  const signature = Signature.fromBase58(job.data.proveRepostInput.signature);
+  const targets = Field(job.data.proveRepostInput.targets);
+  const postState = PostState.fromJSON(JSON.parse(job.data.proveRepostInput.postState)) as PostState;
+  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostInput.targetWitness));
+  const repostState = RepostState.fromJSON(JSON.parse(job.data.proveRepostInput.repostState)) as RepostState;
+  const initialUsersRepostsCounters = Field(job.data.proveRepostInput.initialUsersRepostsCounters);
+  const latestUsersRepostsCounters = Field(job.data.proveRepostInput.latestUsersRepostsCounters);
+  const userRepostsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostInput.userRepostsCounterWitness));
+  const initialTargetsRepostsCounters = Field(job.data.proveRepostInput.initialTargetsRepostsCounters);
+  const latestTargetsRepostsCounters = Field(job.data.proveRepostInput.latestTargetsRepostsCounters);
+  const targetRepostsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostInput.targetRepostsCounterWitness));
+  const initialReposts = Field(job.data.proveRepostInput.initialReposts);
+  const latestReposts = Field(job.data.proveRepostInput.latestReposts);
+  const repostWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostInput.repostWitness));
+
+  
+  const proof = await Reposts.proveRepostPublishingTransition(
+    transition,
+    signature,
+    targets,
+    postState,
+    targetWitness,
+    repostState.allRepostsCounter.sub(1),
+    initialUsersRepostsCounters,
+    latestUsersRepostsCounters,
+    repostState.userRepostsCounter.sub(1),
+    userRepostsCounterWitness,
+    initialTargetsRepostsCounters,
+    latestTargetsRepostsCounters,
+    repostState.targetRepostsCounter.sub(1),
+    targetRepostsCounterWitness,
+    initialReposts,
+    latestReposts,
+    repostWitness,
+    repostState
+  );
+  console.log('Proof created');
+
+  return {transition: JSON.stringify(transition), proof: JSON.stringify(proof.toJSON())};
+
+}, { connection: connection, lockDuration: 600000 });
+
+// ============================================================================
+
+const mergingRepostsWorker = new Worker('mergingRepostsQueue', async job => {
+
+  const mergedTransition = RepostsTransition.fromJSON(JSON.parse(job.data.mergedTransition));
+  const proof1 = RepostsProof.fromJSON(JSON.parse(job.data.proof1));
+  const proof2 = RepostsProof.fromJSON(JSON.parse(job.data.proof2));
+
+  const proof = await Reposts.proveMergedRepostsTransitions(mergedTransition, proof1, proof2);
+  console.log('Merged proof created');
+  return {transition: JSON.stringify(mergedTransition), proof: JSON.stringify(proof.toJSON()) }
+
+}, { connection: connection, lockDuration: 600000 });
+
+// ============================================================================
