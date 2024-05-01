@@ -60,6 +60,10 @@ const commentDeletionsQueue = new Queue('commentDeletionsQueue', {connection});
 const commentDeletionsQueueEvents = new QueueEvents('commentDeletionsQueue', {connection});
 const commentRestorationsQueue = new Queue('commentRestorationsQueue', {connection});
 const commentRestorationsQueueEvents = new QueueEvents('commentRestorationsQueue', {connection});
+const repostsQueue = new Queue('repostsQueue', {connection});
+const repostsQueueEvents = new QueueEvents('repostsQueue', {connection});
+const mergingRepostsQueue = new Queue('mergingRepostsQueue', {connection});
+const mergingRepostsQueueEvents = new QueueEvents('mergingRepostsQueue', {connection});
 
 
 // Load keys, and set up network and smart contract
@@ -764,7 +768,7 @@ while (true) {
   } else if (provingTurn === provingReposts) {
 
     const pendingReposts = await prisma.reposts.findMany({
-      take: 1,
+      take: 3,
       orderBy: {
           allRepostsCounter: 'asc'
       },
@@ -782,14 +786,27 @@ while (true) {
       const lastBlock = await fetchLastBlock(configReposts.url);
       const repostBlockHeight = lastBlock.blockchainLength.toBigint();
       console.log(repostBlockHeight);
-    
-      const transitionsAndProofs: {
-        transition: RepostsTransition,
-        proof: RepostsProof
+
+      const proveRepostInputs: {
+        transition: string,
+        signature: string,
+        targets: string,
+        postState: string,
+        targetWitness: string,
+        repostState: string,
+        initialUsersRepostsCounters: string,
+        latestUsersRepostsCounters: string,
+        userRepostsCounterWitness: string,
+        initialTargetsRepostsCounters: string,
+        latestTargetsRepostsCounters: string,
+        targetRepostsCounterWitness: string,
+        initialReposts: string,
+        latestReposts: string,
+        repostWitness: string
       }[] = [];
     
       for (const pRepost of pendingReposts) {
-        const result = await proveRepost(
+        const result = await generateProveRepostInputs(
           pRepost.isTargetPost,
           pRepost.targetKey,
           pRepost.reposterAddress,
@@ -802,12 +819,42 @@ while (true) {
           pRepost.repostSignature
         );
     
-        transitionsAndProofs.push(result);
+        proveRepostInputs.push(result);
       }
+
+      const jobsPromises: Promise<any>[] = [];
+
+      for (const proveRepostInput of proveRepostInputs) {
+        const job = await repostsQueue.add(
+          `job`,
+          { proveRepostInput: proveRepostInput }
+        );
+        jobsPromises.push(job.waitUntilFinished(repostsQueueEvents));
+      }
+  
+      const transitionsAndProofsAsStrings: {
+        transition: string;
+        proof: string;
+      }[] = await Promise.all(jobsPromises);
+    
+      const transitionsAndProofs: {
+        transition: RepostsTransition,
+        proof: RepostsProof
+      }[] = [];
+    
+      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+        transitionsAndProofs.push({
+          transition: RepostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
+          proof: RepostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+        });
+      });
+  
+      endTime = performance.now();
+      console.log(`${(endTime - startTime)/1000/60} minutes`);
     
       if (transitionsAndProofs.length !== 0) {
+        startTime = performance.now();
         await updateRepostsOnChainState(transitionsAndProofs);
-    
         endTime = performance.now();
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
@@ -2879,7 +2926,7 @@ async function updateCommentsOnChainState(transitionsAndProofs: CommentTransitio
 
 // ============================================================================
 
-async function proveRepost(isTargetPost: boolean, targetKey: string,
+async function generateProveRepostInputs(isTargetPost: boolean, targetKey: string,
   reposterAddressBase58: string, allRepostsCounter: bigint,
   userRepostsCounter: bigint, targetRepostsCounter: bigint,
   repostBlockHeight: bigint, deletionBlockHeight: bigint,
@@ -2955,43 +3002,84 @@ async function proveRepost(isTargetPost: boolean, targetKey: string,
     repostState
   );
   console.log('Transition created');
-  
-  const proof = await Reposts.proveRepostPublishingTransition(
-    transition,
-    signature,
-    postsMap.getRoot(),
-    postState,
-    targetWitness,
-    repostState.allRepostsCounter.sub(1),
-    initialUsersRepostsCounters,
-    latestUsersRepostsCounters,
-    repostState.userRepostsCounter.sub(1),
-    userRepostsCounterWitness,
-    initialTargetsRepostsCounters,
-    latestTargetsRepostsCounters,
-    repostState.targetRepostsCounter.sub(1),
-    targetRepostsCounterWitness,
-    initialReposts,
-    latestReposts,
-    repostWitness,
-    repostState
-  );
-  console.log('Proof created');
 
-  return {transition: transition, proof: proof};
+  return {
+    transition: JSON.stringify(transition),
+    signature: signatureBase58,
+    targets: postsMap.getRoot().toString(),
+    postState: JSON.stringify(postState),
+    targetWitness: JSON.stringify(targetWitness.toJSON()),
+    repostState: JSON.stringify(repostState),
+    initialUsersRepostsCounters: initialUsersRepostsCounters.toString(),
+    latestUsersRepostsCounters: latestUsersRepostsCounters.toString(),
+    userRepostsCounterWitness: JSON.stringify(userRepostsCounterWitness.toJSON()),
+    initialTargetsRepostsCounters: initialTargetsRepostsCounters.toString(),
+    latestTargetsRepostsCounters: latestTargetsRepostsCounters.toString(),
+    targetRepostsCounterWitness: JSON.stringify(targetRepostsCounterWitness.toJSON()),
+    initialReposts: initialReposts.toString(),
+    latestReposts: latestReposts.toString(),
+    repostWitness: JSON.stringify(repostWitness.toJSON())
+  }
 }
 
 // ============================================================================
 
-async function updateRepostsOnChainState(transitionsAndProofs: {
+type RepostTransitionAndProof = {
   transition: RepostsTransition,
   proof: RepostsProof
-}[]) {
+}
+
+async function updateRepostsOnChainState(transitionsAndProofs: RepostTransitionAndProof[]) {
+
+  async function mergeTransitionsAndProofs(tp1: RepostTransitionAndProof, tp2: RepostTransitionAndProof) {
+    const mergedTransition = RepostsTransition.mergeRepostsTransitions(tp1.transition, tp2.transition);
+    const job = await mergingRepostsQueue.add(
+      `job`,
+      { mergedTransition: JSON.stringify(mergedTransition),
+        proof1: JSON.stringify(tp1.proof.toJSON()),
+        proof2: JSON.stringify(tp2.proof.toJSON())
+      }
+    );
+    return job.waitUntilFinished(mergingRepostsQueueEvents);
+  }
+
+  async function recursiveMerge(transitionsAndProofs: RepostTransitionAndProof[]): Promise<RepostTransitionAndProof> {
+      if (transitionsAndProofs.length === 1) {
+          return transitionsAndProofs[0];
+      }
+
+      const mergedTransitionsAndProofs = [];
+      for (let i = 0; i < transitionsAndProofs.length; i += 2) {
+          if (i + 1 < transitionsAndProofs.length) {
+            mergedTransitionsAndProofs.push(mergeTransitionsAndProofs(transitionsAndProofs[i], transitionsAndProofs[i+1]));
+          } else {
+            mergedTransitionsAndProofs.push(Promise.resolve({
+              transition: JSON.stringify(transitionsAndProofs[i].transition),
+              proof: JSON.stringify(transitionsAndProofs[i].proof.toJSON())
+            }));
+          }
+      }
+      const processedMergedTransitionsAndProofs:{
+        transition: string;
+        proof: string;
+      }[] = await Promise.all(mergedTransitionsAndProofs);
+      const processedMergedTransitionsAndProofsCasted: RepostTransitionAndProof[] = [];
+      processedMergedTransitionsAndProofs.forEach(transitionAndProof => {
+        processedMergedTransitionsAndProofsCasted.push({
+          transition: RepostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
+          proof: RepostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+        });
+      });
+      return recursiveMerge(processedMergedTransitionsAndProofsCasted);
+  }
+
+  const result = await recursiveMerge(transitionsAndProofs);
+  
   let sentTxn;
   const txn = await Mina.transaction(
     { sender: feepayerAddress, fee: fee },
     () => {
-      repostsContract.update(transitionsAndProofs[0].proof);
+      repostsContract.update(result.proof);
     }
   );
   await txn.prove();
