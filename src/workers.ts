@@ -514,3 +514,40 @@ const repostDeletionsWorker = new Worker('repostDeletionsQueue', async job => {
 }, { connection: connection, lockDuration: 600000 });
 
 // ============================================================================
+
+const repostRestorationsWorker = new Worker('repostRestorationsQueue', async job => {
+
+  const transition = RepostsTransition.fromJSON(JSON.parse(job.data.proveRepostRestorationInput.transition));
+  const signature = Signature.fromBase58(job.data.proveRepostRestorationInput.signature);
+  const targets = Field(job.data.proveRepostRestorationInput.targets);
+  const postState = PostState.fromJSON(JSON.parse(job.data.proveRepostRestorationInput.postState)) as PostState;
+  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostRestorationInput.targetWitness));
+  const currentAllRepostsCounter = Field(job.data.proveRepostRestorationInput.currentAllRepostsCounter);
+  const initialRepostState = RepostState.fromJSON(JSON.parse(job.data.proveRepostRestorationInput.initialRepostState)) as RepostState;
+  const usersRepostsCounters = Field(job.data.proveRepostRestorationInput.usersRepostsCounters);
+  const targetsRepostsCounters = Field(job.data.proveRepostRestorationInput.targetsRepostsCounters);
+  const initialReposts = Field(job.data.proveRepostRestorationInput.initialReposts);
+  const latestReposts = Field(job.data.proveRepostRestorationInput.latestReposts);
+  const repostWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostRestorationInput.repostWitness));
+  const restorationBlockHeight = Field(job.data.proveRepostRestorationInput.restorationBlockHeight);
+  
+  const proof = await Reposts.proveRepostRestorationTransition(
+    transition,
+    signature,
+    targets,
+    postState,
+    targetWitness,
+    currentAllRepostsCounter,
+    usersRepostsCounters,
+    targetsRepostsCounters,
+    initialReposts,
+    latestReposts,
+    initialRepostState,
+    repostWitness,
+    restorationBlockHeight
+  );
+  console.log('Proof created');
+
+  return {transition: JSON.stringify(transition), proof: JSON.stringify(proof.toJSON())};
+
+}, { connection: connection, lockDuration: 600000 });
