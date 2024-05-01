@@ -331,3 +331,42 @@ const mergingCommentsWorker = new Worker('mergingCommentsQueue', async job => {
   return {transition: JSON.stringify(mergedTransition), proof: JSON.stringify(proof.toJSON()) }
 
 }, { connection: connection, lockDuration: 600000 });
+
+// ============================================================================
+
+const commentDeletionsWorker = new Worker('commentDeletionsQueue', async job => {
+
+  const transition = CommentsTransition.fromJSON(JSON.parse(job.data.proveCommentDeletionInput.transition));
+  const signature = Signature.fromBase58(job.data.proveCommentDeletionInput.signature);
+  const targets = Field(job.data.proveCommentDeletionInput.targets);
+  const postState = PostState.fromJSON(JSON.parse(job.data.proveCommentDeletionInput.postState)) as PostState;
+  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentDeletionInput.targetWitness));
+  const currentAllCommentsCounter = Field(job.data.proveCommentDeletionInput.currentAllCommentsCounter);
+  const initialCommentState = CommentState.fromJSON(JSON.parse(job.data.proveCommentDeletionInput.initialCommentState)) as CommentState;
+  const usersCommentsCounters = Field(job.data.proveCommentDeletionInput.usersCommentsCounters);
+  const targetsCommentsCounters = Field(job.data.proveCommentDeletionInput.targetsCommentsCounters);
+  const initialComments = Field(job.data.proveCommentDeletionInput.initialComments);
+  const latestComments = Field(job.data.proveCommentDeletionInput.latestComments);
+  const commentWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentDeletionInput.commentWitness));
+  const deletionBlockHeight = Field(job.data.proveCommentDeletionInput.deletionBlockHeight);
+  
+  const proof = await Comments.proveCommentDeletionTransition(
+    transition,
+    signature,
+    targets,
+    postState,
+    targetWitness,
+    currentAllCommentsCounter,
+    usersCommentsCounters,
+    targetsCommentsCounters,
+    initialComments,
+    latestComments,
+    initialCommentState,
+    commentWitness,
+    deletionBlockHeight
+  );
+  console.log('Proof created');
+
+  return {transition: JSON.stringify(transition), proof: JSON.stringify(proof.toJSON())};
+
+}, { connection: connection, lockDuration: 600000 });
