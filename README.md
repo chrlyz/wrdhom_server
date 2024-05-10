@@ -14,13 +14,31 @@ npm install
 npm run build
 ```
 
+### Copy keys and config.json file
+
+Follow the instructions in the [wrdhom_contracts](https://github.com/chrlyz/wrdhom_contracts) repository to generate the proper files and copy them into this one.
+
 ### Start server to receive requests
+
+- Create a Postgres database that follows the schema in the `/prisma/schema.prisma` file.
+- Set the `DATABASE_URL` variable in your `.env` file.
+- Create a [web3.storage](https://web3.storage/) account.
+- Set the `W3S_EMAIL` and `W3S_SPACE variables` in your .env file.
 
 ``` console
 npm run service
 ```
 
-### Start prover to update on-chain state based on valid requests
+### Start workers to accept requests to generate proofs from prover
+
+- Start a Redis server and indicate `HOST` and `PORT` in your `.env` file.
+- You can start any number of workers in different machines and indicate their number in the `PARALLEL_NUMBER` `.env` file.
+
+``` console
+npm run workers
+```
+
+### Start prover to coordinate generation of proofs in parallel through workers
 
 ``` console
 npm run prover

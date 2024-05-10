@@ -65,8 +65,8 @@ const worker = new Worker('queue', async job => {
   const mergingWorker = new Worker('mergingQueue', async job => {
 
     const mergedTransition = PostsTransition.fromJSON(JSON.parse(job.data.mergedTransition));
-    const proof1 = PostsProof.fromJSON(JSON.parse(job.data.proof1));
-    const proof2 = PostsProof.fromJSON(JSON.parse(job.data.proof2));
+    const proof1 = await PostsProof.fromJSON(JSON.parse(job.data.proof1));
+    const proof2 = await PostsProof.fromJSON(JSON.parse(job.data.proof2));
 
     const proof = await Posts.proveMergedPostsTransitions(mergedTransition, proof1, proof2);
     console.log('Merged proof created');
@@ -187,8 +187,8 @@ const reactionsWorker = new Worker('reactionsQueue', async job => {
 const mergingReactionsWorker = new Worker('mergingReactionsQueue', async job => {
 
   const mergedTransition = ReactionsTransition.fromJSON(JSON.parse(job.data.mergedTransition));
-  const proof1 = ReactionsProof.fromJSON(JSON.parse(job.data.proof1));
-  const proof2 = ReactionsProof.fromJSON(JSON.parse(job.data.proof2));
+  const proof1 = await ReactionsProof.fromJSON(JSON.parse(job.data.proof1));
+  const proof2 = await ReactionsProof.fromJSON(JSON.parse(job.data.proof2));
 
   const proof = await Reactions.proveMergedReactionsTransitions(mergedTransition, proof1, proof2);
   console.log('Merged proof created');
@@ -326,8 +326,8 @@ const commentsQueueWorker = new Worker('commentsQueue', async job => {
 const mergingCommentsWorker = new Worker('mergingCommentsQueue', async job => {
 
   const mergedTransition = CommentsTransition.fromJSON(JSON.parse(job.data.mergedTransition));
-  const proof1 = CommentsProof.fromJSON(JSON.parse(job.data.proof1));
-  const proof2 = CommentsProof.fromJSON(JSON.parse(job.data.proof2));
+  const proof1 = await CommentsProof.fromJSON(JSON.parse(job.data.proof1));
+  const proof2 = await CommentsProof.fromJSON(JSON.parse(job.data.proof2));
 
   const proof = await Comments.proveMergedCommentsTransitions(mergedTransition, proof1, proof2);
   console.log('Merged proof created');
@@ -465,8 +465,8 @@ const repostsQueueWorker = new Worker('repostsQueue', async job => {
 const mergingRepostsWorker = new Worker('mergingRepostsQueue', async job => {
 
   const mergedTransition = RepostsTransition.fromJSON(JSON.parse(job.data.mergedTransition));
-  const proof1 = RepostsProof.fromJSON(JSON.parse(job.data.proof1));
-  const proof2 = RepostsProof.fromJSON(JSON.parse(job.data.proof2));
+  const proof1 = await RepostsProof.fromJSON(JSON.parse(job.data.proof1));
+  const proof2 = await RepostsProof.fromJSON(JSON.parse(job.data.proof2));
 
   const proof = await Reposts.proveMergedRepostsTransitions(mergedTransition, proof1, proof2);
   console.log('Merged proof created');
