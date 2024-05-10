@@ -211,7 +211,7 @@ while (true) {
   // Process pending posts to update on-chain state
 
   const pendingPosts = await prisma.posts.findMany({
-    take: 3,
+    take: Number(process.env.PARALLEL_NUMBER),
     orderBy: {
         allPostsCounter: 'asc'
     },
@@ -276,13 +276,13 @@ while (true) {
       transition: PostsTransition,
       proof: PostsProof
     }[] = [];
-  
-    transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+
+    for (const transitionAndProof of transitionsAndProofsAsStrings) {
       transitionsAndProofs.push({
         transition: PostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-        proof: PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+        proof: await PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
       });
-    });
+    }
 
     endTime = performance.now();
     console.log(`${(endTime - startTime)/1000/60} minutes`);
@@ -381,7 +381,7 @@ while (true) {
   } else if (provingTurn === provingReactions) {
 
     const pendingReactions = await prisma.reactions.findMany({
-      take: 3,
+      take: Number(process.env.PARALLEL_NUMBER),
       orderBy: {
           allReactionsCounter: 'asc'
       },
@@ -455,13 +455,13 @@ while (true) {
         transition: ReactionsTransition,
         proof: ReactionsProof
       }[] = [];
-    
-      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+
+      for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: ReactionsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-          proof: ReactionsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+          proof: await ReactionsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
-      });
+      }
   
       endTime = performance.now();
       console.log(`${(endTime - startTime)/1000/60} minutes`);
@@ -576,7 +576,7 @@ while (true) {
   } else if (provingTurn === provingComments) {
 
     const pendingComments = await prisma.comments.findMany({
-      take: 3,
+      take: Number(process.env.PARALLEL_NUMBER),
       orderBy: {
           allCommentsCounter: 'asc'
       },
@@ -650,13 +650,13 @@ while (true) {
         transition: CommentsTransition,
         proof: CommentsProof
       }[] = [];
-    
-      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+
+      for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: CommentsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-          proof: CommentsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+          proof: await CommentsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
-      });
+      }
   
       endTime = performance.now();
       console.log(`${(endTime - startTime)/1000/60} minutes`);
@@ -772,7 +772,7 @@ while (true) {
   } else if (provingTurn === provingReposts) {
 
     const pendingReposts = await prisma.reposts.findMany({
-      take: 3,
+      take: Number(process.env.PARALLEL_NUMBER),
       orderBy: {
           allRepostsCounter: 'asc'
       },
@@ -845,13 +845,13 @@ while (true) {
         transition: RepostsTransition,
         proof: RepostsProof
       }[] = [];
-    
-      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+
+      for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: RepostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-          proof: RepostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+          proof: await RepostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
-      });
+      }
   
       endTime = performance.now();
       console.log(`${(endTime - startTime)/1000/60} minutes`);
@@ -966,7 +966,7 @@ while (true) {
   } else if (provingTurn === provingPostDeletions) {
 
     const pendingDeletions = await prisma.postDeletions.findMany({
-      take: 3,
+      take: Number(process.env.PARALLEL_NUMBER),
       orderBy: {
           allDeletionsCounter: 'asc'
       },
@@ -1040,13 +1040,13 @@ while (true) {
         transition: PostsTransition,
         proof: PostsProof
       }[] = [];
-    
-      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+
+      for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: PostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-          proof: PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+          proof: await PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
-      });
+      }
   
       endTime = performance.now();
       console.log(`${(endTime - startTime)/1000/60} minutes`);
@@ -1144,7 +1144,7 @@ while (true) {
   }  else if (provingTurn === provingPostRestorations) {
 
     const pendingRestorations = await prisma.postRestorations.findMany({
-      take: 3,
+      take: Number(process.env.PARALLEL_NUMBER),
       orderBy: {
           allRestorationsCounter: 'asc'
       },
@@ -1219,13 +1219,13 @@ while (true) {
         transition: PostsTransition,
         proof: PostsProof
       }[] = [];
-    
-      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+
+      for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: PostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-          proof: PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+          proof: await PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
-      });
+      }
   
       endTime = performance.now();
       console.log(`${(endTime - startTime)/1000/60} minutes`);
@@ -1325,7 +1325,7 @@ while (true) {
   } else if (provingTurn === provingCommentDeletions) {
 
     const pendingCommentDeletions = await prisma.commentDeletions.findMany({
-      take: 3,
+      take: Number(process.env.PARALLEL_NUMBER),
       orderBy: {
           allDeletionsCounter: 'asc'
       },
@@ -1413,13 +1413,13 @@ while (true) {
         transition: CommentsTransition,
         proof: CommentsProof
       }[] = [];
-    
-      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+
+      for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: CommentsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-          proof: CommentsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+          proof: await CommentsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
-      });
+      }
   
       endTime = performance.now();
       console.log(`${(endTime - startTime)/1000/60} minutes`);
@@ -1526,7 +1526,7 @@ while (true) {
   } else if (provingTurn === provingCommentRestorations) {
 
     const pendingCommentRestorations = await prisma.commentRestorations.findMany({
-      take: 3,
+      take: Number(process.env.PARALLEL_NUMBER),
       orderBy: {
           allRestorationsCounter: 'asc'
       },
@@ -1615,13 +1615,13 @@ while (true) {
         transition: CommentsTransition,
         proof: CommentsProof
       }[] = [];
-    
-      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+
+      for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: CommentsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-          proof: CommentsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+          proof: await CommentsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
-      });
+      }
   
       endTime = performance.now();
       console.log(`${(endTime - startTime)/1000/60} minutes`);
@@ -1729,7 +1729,7 @@ while (true) {
   } else if (provingTurn === provingRepostDeletions) {
 
     const pendingRepostDeletions = await prisma.repostDeletions.findMany({
-      take: 3,
+      take: Number(process.env.PARALLEL_NUMBER),
       orderBy: {
           allDeletionsCounter: 'asc'
       },
@@ -1816,13 +1816,13 @@ while (true) {
         transition: RepostsTransition,
         proof: RepostsProof
       }[] = [];
-    
-      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+
+      for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: RepostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-          proof: RepostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+          proof: await RepostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
-      });
+      }
   
       endTime = performance.now();
       console.log(`${(endTime - startTime)/1000/60} minutes`);
@@ -1927,7 +1927,7 @@ while (true) {
   } else if (provingTurn === provingRepostRestorations) {
 
     const pendingRepostRestorations = await prisma.repostRestorations.findMany({
-      take: 3,
+      take: Number(process.env.PARALLEL_NUMBER),
       orderBy: {
           allRestorationsCounter: 'asc'
       },
@@ -2015,13 +2015,13 @@ while (true) {
         transition: RepostsTransition,
         proof: RepostsProof
       }[] = [];
-    
-      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+
+      for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: RepostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-          proof: RepostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+          proof: await RepostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
-      });
+      }
   
       endTime = performance.now();
       console.log(`${(endTime - startTime)/1000/60} minutes`);
@@ -2127,7 +2127,7 @@ while (true) {
   } else if (provingTurn === provingReactionDeletions) {
 
     const pendingReactionDeletions = await prisma.reactionDeletions.findMany({
-      take: 3,
+      take: Number(process.env.PARALLEL_NUMBER),
       orderBy: {
           allDeletionsCounter: 'asc'
       },
@@ -2215,13 +2215,13 @@ while (true) {
         transition: ReactionsTransition,
         proof: ReactionsProof
       }[] = [];
-    
-      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+
+      for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: ReactionsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-          proof: ReactionsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+          proof: await ReactionsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
-      });
+      }
   
       endTime = performance.now();
       console.log(`${(endTime - startTime)/1000/60} minutes`);
@@ -2328,7 +2328,7 @@ while (true) {
   } else if (provingTurn === provingReactionRestorations) {
 
     const pendingReactionRestorations = await prisma.reactionRestorations.findMany({
-      take: 3,
+      take: Number(process.env.PARALLEL_NUMBER),
       orderBy: {
           allRestorationsCounter: 'asc'
       },
@@ -2417,13 +2417,13 @@ while (true) {
         transition: ReactionsTransition,
         proof: ReactionsProof
       }[] = [];
-    
-      transitionsAndProofsAsStrings.forEach(transitionAndProof => {
+
+      for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: ReactionsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-          proof: ReactionsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+          proof: await ReactionsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
-      });
+      }
   
       endTime = performance.now();
       console.log(`${(endTime - startTime)/1000/60} minutes`);
@@ -2639,12 +2639,14 @@ async function updatePostsOnChainState(transitionsAndProofs: PostTransitionAndPr
         proof: string;
       }[] = await Promise.all(mergedTransitionsAndProofs);
       const processedMergedTransitionsAndProofsCasted: PostTransitionAndProof[] = [];
-      processedMergedTransitionsAndProofs.forEach(transitionAndProof => {
+
+      for (const transitionAndProof of processedMergedTransitionsAndProofs) {
         processedMergedTransitionsAndProofsCasted.push({
           transition: PostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-          proof: PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+          proof: await PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
-      });
+      }
+
       return recursiveMerge(processedMergedTransitionsAndProofsCasted);
   }
 
@@ -2653,7 +2655,7 @@ async function updatePostsOnChainState(transitionsAndProofs: PostTransitionAndPr
   let sentTxn;
   const txn = await Mina.transaction(
     { sender: feepayerAddress, fee: fee },
-    () => {
+    async () => {
       postsContract.update(result.proof);
     }
   );
@@ -2661,7 +2663,7 @@ async function updatePostsOnChainState(transitionsAndProofs: PostTransitionAndPr
   sentTxn = await txn.sign([feepayerKey]).send();
 
   if (sentTxn !== undefined) {
-    console.log(`https://minascan.io/berkeley/tx/${sentTxn.hash}`);
+    console.log(`https://minascan.io/devnet/tx/${sentTxn.hash}`);
   }
 
   return sentTxn;
@@ -2810,12 +2812,14 @@ async function updateReactionsOnChainState(transitionsAndProofs: ReactionTransit
         proof: string;
       }[] = await Promise.all(mergedTransitionsAndProofs);
       const processedMergedTransitionsAndProofsCasted: ReactionTransitionAndProof[] = [];
-      processedMergedTransitionsAndProofs.forEach(transitionAndProof => {
+
+      for (const transitionAndProof of processedMergedTransitionsAndProofs) {
         processedMergedTransitionsAndProofsCasted.push({
           transition: ReactionsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-          proof: ReactionsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+          proof: await ReactionsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
-      });
+      }
+
       return recursiveMerge(processedMergedTransitionsAndProofsCasted);
   }
 
@@ -2824,7 +2828,7 @@ async function updateReactionsOnChainState(transitionsAndProofs: ReactionTransit
   let sentTxn;
   const txn = await Mina.transaction(
     { sender: feepayerAddress, fee: fee },
-    () => {
+    async () => {
       reactionsContract.update(result.proof);
     }
   );
@@ -2832,7 +2836,7 @@ async function updateReactionsOnChainState(transitionsAndProofs: ReactionTransit
   sentTxn = await txn.sign([feepayerKey]).send();
 
   if (sentTxn !== undefined) {
-    console.log(`https://minascan.io/berkeley/tx/${sentTxn.hash}`);
+    console.log(`https://minascan.io/devnet/tx/${sentTxn.hash}`);
   }
 
   return sentTxn;
@@ -2982,12 +2986,14 @@ async function updateCommentsOnChainState(transitionsAndProofs: CommentTransitio
         proof: string;
       }[] = await Promise.all(mergedTransitionsAndProofs);
       const processedMergedTransitionsAndProofsCasted: CommentTransitionAndProof[] = [];
-      processedMergedTransitionsAndProofs.forEach(transitionAndProof => {
+
+      for (const transitionAndProof of processedMergedTransitionsAndProofs) {
         processedMergedTransitionsAndProofsCasted.push({
           transition: CommentsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-          proof: CommentsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+          proof: await CommentsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
-      });
+      }
+
       return recursiveMerge(processedMergedTransitionsAndProofsCasted);
   }
 
@@ -2996,7 +3002,7 @@ async function updateCommentsOnChainState(transitionsAndProofs: CommentTransitio
   let sentTxn;
   const txn = await Mina.transaction(
     { sender: feepayerAddress, fee: fee },
-    () => {
+    async () => {
       commentsContract.update(result.proof);
     }
   );
@@ -3004,7 +3010,7 @@ async function updateCommentsOnChainState(transitionsAndProofs: CommentTransitio
   sentTxn = await txn.sign([feepayerKey]).send();
 
   if (sentTxn !== undefined) {
-    console.log(`https://minascan.io/berkeley/tx/${sentTxn.hash}`);
+    console.log(`https://minascan.io/devnet/tx/${sentTxn.hash}`);
   }
 
   return sentTxn;
@@ -3150,12 +3156,14 @@ async function updateRepostsOnChainState(transitionsAndProofs: RepostTransitionA
         proof: string;
       }[] = await Promise.all(mergedTransitionsAndProofs);
       const processedMergedTransitionsAndProofsCasted: RepostTransitionAndProof[] = [];
-      processedMergedTransitionsAndProofs.forEach(transitionAndProof => {
+
+      for (const transitionAndProof of processedMergedTransitionsAndProofs) {
         processedMergedTransitionsAndProofsCasted.push({
           transition: RepostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-          proof: RepostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+          proof: await RepostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
-      });
+      }
+      
       return recursiveMerge(processedMergedTransitionsAndProofsCasted);
   }
 
@@ -3164,7 +3172,7 @@ async function updateRepostsOnChainState(transitionsAndProofs: RepostTransitionA
   let sentTxn;
   const txn = await Mina.transaction(
     { sender: feepayerAddress, fee: fee },
-    () => {
+    async () => {
       repostsContract.update(result.proof);
     }
   );
@@ -3172,7 +3180,7 @@ async function updateRepostsOnChainState(transitionsAndProofs: RepostTransitionA
   sentTxn = await txn.sign([feepayerKey]).send();
 
   if (sentTxn !== undefined) {
-    console.log(`https://minascan.io/berkeley/tx/${sentTxn.hash}`);
+    console.log(`https://minascan.io/devnet/tx/${sentTxn.hash}`);
   }
 
   return sentTxn;
