@@ -1678,7 +1678,7 @@ server.post<{Body: SignedReactionRestoration}>('/reactions/restore', async (requ
 
 server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
   try {
-    const { howMany, fromBlock, toBlock, posterAddress, postKey } = request.query;
+    const { howMany, fromBlock, toBlock, profileAddress, postKey, currentUser } = request.query;
 
     if (postKey !== undefined) {
       const post = await prisma.posts.findUnique({
@@ -1687,11 +1687,11 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         }
       });
 
-      const posterAddress = PublicKey.fromBase58(post!.posterAddress);
+      const profileAddress = PublicKey.fromBase58(post!.posterAddress);
       const postContentID = CircuitString.fromString(post!.postContentID);
 
       const postState = new PostState({
-        posterAddress: posterAddress,
+        posterAddress: profileAddress,
         postContentID: postContentID,
         allPostsCounter: Field(post!.allPostsCounter),
         userPostsCounter: Field(post!.userPostsCounter),
@@ -1717,7 +1717,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
     let numberOfPosts: number;
     let numberOfPostsWitness: string;
 
-    if (posterAddress === undefined) {
+    if (profileAddress === undefined) {
       numberOfPosts = (await prisma.posts.findMany({
         where: {
           postBlockHeight: {
@@ -1743,13 +1743,13 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
     } else {
       numberOfPosts = (await prisma.posts.findMany({
         where: {
-          posterAddress: posterAddress,
+          posterAddress: profileAddress,
           postBlockHeight: {
             not: 0
           }
         }
       })).length;
-      const posterAddressAsField = Poseidon.hash(PublicKey.fromBase58(posterAddress).toFields());
+      const posterAddressAsField = Poseidon.hash(PublicKey.fromBase58(profileAddress).toFields());
       numberOfPostsWitness = usersPostsCountersMap.getWitness(posterAddressAsField).toJSON();
 
       posts = await prisma.posts.findMany({
@@ -1758,7 +1758,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
           allPostsCounter: 'desc'
         },
         where: {
-          posterAddress: posterAddress,
+          posterAddress: profileAddress,
           postBlockHeight: {
             not: 0,
             gte: fromBlock,
@@ -1771,7 +1771,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
     const postsResponse: PostsResponse[] = [];
 
     for (const post of posts) {
-      const posterAddress = PublicKey.fromBase58(post.posterAddress);
+      const profileAddress = PublicKey.fromBase58(post.posterAddress);
       const postContentID = CircuitString.fromString(post.postContentID);
       const postKey = Field(post.postKey);
       const postWitness = postsMap.getWitness(postKey).toJSON();
@@ -1782,7 +1782,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       }
 
       const postState = new PostState({
-        posterAddress: posterAddress,
+        posterAddress: profileAddress,
         postContentID: postContentID,
         allPostsCounter: Field(post.allPostsCounter),
         userPostsCounter: Field(post.userPostsCounter),
@@ -1909,6 +1909,45 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         })
       }
 
+      const currentUserRepost = await prisma.reposts.findMany({
+        orderBy: {
+          allRepostsCounter: 'desc'
+        },
+        where: {
+          targetKey: post.postKey,
+          reposterAddress: currentUser,
+          repostBlockHeight: {
+            not: 0
+          },
+          deletionBlockHeight: 0
+        }
+      });
+
+      let currentUserRepostStateResponse: string | undefined;
+      let currentUserRepostKeyResponse: string | undefined;
+      let currentUserRepostWitnessResponse: string | undefined;
+      if (currentUserRepost.length === 1) {
+        const currentUserReposterAddress = PublicKey.fromBase58(currentUserRepost[0].reposterAddress);
+        const currentUserRepostKey = Field(currentUserRepost[0].repostKey);
+        const currentUserRepostWitness = repostsMap.getWitness(currentUserRepostKey).toJSON();
+  
+        const currentUserRepostState = new RepostState({
+          isTargetPost: Bool(currentUserRepost[0].isTargetPost),
+          targetKey: postKey,
+          reposterAddress: currentUserReposterAddress,
+          allRepostsCounter: Field(currentUserRepost[0].allRepostsCounter),
+          userRepostsCounter: Field(currentUserRepost[0].userRepostsCounter),
+          targetRepostsCounter: Field(currentUserRepost[0].targetRepostsCounter),
+          repostBlockHeight: Field(currentUserRepost[0].repostBlockHeight),
+          deletionBlockHeight: Field(currentUserRepost[0].deletionBlockHeight),
+          restorationBlockHeight: Field(currentUserRepost[0].restorationBlockHeight)
+        });
+
+        currentUserRepostStateResponse = JSON.stringify(currentUserRepostState);
+        currentUserRepostKeyResponse = currentUserRepost[0].repostKey;
+        currentUserRepostWitnessResponse = JSON.stringify(currentUserRepostWitness);
+      }
+
       postsResponse.push({
         postState: JSON.stringify(postState),
         postKey: post.postKey,
@@ -1923,7 +1962,10 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         numberOfCommentsWitness: JSON.stringify(numberOfCommentsWitness),
         embeddedReposts: embeddedReposts,
         numberOfReposts: numberOfReposts,
-        numberOfRepostsWitness: JSON.stringify(numberOfRepostsWitness)
+        numberOfRepostsWitness: JSON.stringify(numberOfRepostsWitness),
+        currentUserRepostState: currentUserRepostStateResponse,
+        currentUserRepostKey: currentUserRepostKeyResponse,
+        currentUserRepostWitness: currentUserRepostWitnessResponse,
       });
     };
 
@@ -2400,8 +2442,9 @@ interface PostsQuery {
   howMany: number,
   fromBlock: number,
   toBlock: number,
-  posterAddress: string,
-  postKey: string
+  profileAddress: string,
+  postKey: string,
+  currentUser: string
 }
 
 // ============================================================================
@@ -2528,7 +2571,10 @@ type PostsResponse = {
   numberOfCommentsWitness: string,
   embeddedReposts: EmbeddedReposts[],
   numberOfReposts: number,
-  numberOfRepostsWitness: string
+  numberOfRepostsWitness: string,
+  currentUserRepostState: string | undefined,
+  currentUserRepostKey: string | undefined,
+  currentUserRepostWitness: string | undefined
 }
 
 // ============================================================================
