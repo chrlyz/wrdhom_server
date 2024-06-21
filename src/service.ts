@@ -2125,34 +2125,30 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
       return { repostState: JSON.stringify(repostState)};
     }
 
-    let reposts: {
-      repostKey: string,
-      isTargetPost: boolean,
-      targetKey: string,
-      reposterAddress: string,
-      allRepostsCounter: bigint,
-      userRepostsCounter: bigint,
-      targetRepostsCounter: bigint,
-      repostBlockHeight: bigint,
-      deletionBlockHeight: bigint,
-      restorationBlockHeight: bigint,
-      repostSignature: string
-    }[];
-    let numberOfReposts: number;
-    let numberOfRepostsWitness: JSON;
+    let numberOfDeletedReposts: number;
+    let reposts: Reposts[];
 
     if (reposterAddress === undefined) {
-      numberOfReposts = (await prisma.reposts.findMany({
+
+      numberOfDeletedReposts = (await prisma.reposts.findMany({
+        take: Number(howMany),
+        orderBy: {
+          allRepostsCounter: 'desc'
+        },
         where: {
           repostBlockHeight: {
+            not: 0,
+            gte: fromBlock,
+            lte: toBlock
+          },
+          deletionBlockHeight: {
             not: 0
           }
         }
       })).length;
-      numberOfRepostsWitness = JSON.parse('{"profile": false}');
 
       reposts = await prisma.reposts.findMany({
-        take: Number(howMany),
+        take: Number(howMany) + numberOfDeletedReposts,
         orderBy: {
           allRepostsCounter: 'desc'
         },
@@ -2164,17 +2160,8 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
           }
         }
       });
+
     } else {
-      numberOfReposts = (await prisma.reposts.findMany({
-        where: {
-          reposterAddress: reposterAddress,
-          repostBlockHeight: {
-            not: 0
-          }
-        }
-      })).length;
-      const reposterAddressAsField = Poseidon.hash(PublicKey.fromBase58(reposterAddress).toFields());
-      numberOfRepostsWitness = usersRepostsCountersMap.getWitness(reposterAddressAsField).toJSON();
 
       reposts = await prisma.reposts.findMany({
         take: Number(howMany),
@@ -2190,6 +2177,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
           }
         }
       });
+
     }
 
     const repostsResponse: RepostsResponse[] = [];
@@ -2379,8 +2367,6 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
     }
 
     const response = {
-      numberOfReposts: numberOfReposts,
-      numberOfRepostsWitness: JSON.stringify(numberOfRepostsWitness),
       repostsResponse: repostsResponse
     }
 
@@ -2632,6 +2618,22 @@ type Posts = {
   deletionBlockHeight: bigint;
   restorationBlockHeight: bigint;
   postSignature: string;
+};
+
+// ============================================================================
+
+type Reposts = {
+  repostKey: string,
+  isTargetPost: boolean,
+  targetKey: string,
+  reposterAddress: string,
+  allRepostsCounter: bigint,
+  userRepostsCounter: bigint,
+  targetRepostsCounter: bigint,
+  repostBlockHeight: bigint,
+  deletionBlockHeight: bigint,
+  restorationBlockHeight: bigint,
+  repostSignature: string
 };
 
 // ============================================================================
