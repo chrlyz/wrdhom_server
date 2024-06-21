@@ -1703,32 +1703,29 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       return { postState: JSON.stringify(postState)};
     }
 
-    let posts: {
-      postKey: string;
-      posterAddress: string;
-      postContentID: string;
-      allPostsCounter: bigint;
-      userPostsCounter: bigint;
-      postBlockHeight: bigint;
-      deletionBlockHeight: bigint;
-      restorationBlockHeight: bigint;
-      postSignature: string;
-    }[];
-    let numberOfPosts: number;
-    let numberOfPostsWitness: string;
+    let numberOfDeletedPosts: number;
+    let posts: Posts[];
 
     if (profileAddress === undefined) {
-      numberOfPosts = (await prisma.posts.findMany({
+
+      numberOfDeletedPosts = (await prisma.posts.findMany({
+        take: Number(howMany),
+        orderBy: {
+          allPostsCounter: 'desc'
+        },
         where: {
           postBlockHeight: {
+            not: 0,
+            gte: fromBlock,
+            lte: toBlock
+          }, deletionBlockHeight: {
             not: 0
           }
         }
-      })).length;
-      numberOfPostsWitness = JSON.parse('{"profile": false}');
+      })).length
 
       posts = await prisma.posts.findMany({
-        take: Number(howMany),
+        take: Number(howMany) + numberOfDeletedPosts,
         orderBy: {
           allPostsCounter: 'desc'
         },
@@ -1740,20 +1737,29 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
           }
         }
       });
+
     } else {
-      numberOfPosts = (await prisma.posts.findMany({
+
+      numberOfDeletedPosts = (await prisma.posts.findMany({
+        take: Number(howMany),
+        orderBy: {
+          allPostsCounter: 'desc'
+        },
         where: {
           posterAddress: profileAddress,
           postBlockHeight: {
+            not: 0,
+            gte: fromBlock,
+            lte: toBlock
+          },
+          deletionBlockHeight: {
             not: 0
           }
         }
       })).length;
-      const posterAddressAsField = Poseidon.hash(PublicKey.fromBase58(profileAddress).toFields());
-      numberOfPostsWitness = usersPostsCountersMap.getWitness(posterAddressAsField).toJSON();
 
       posts = await prisma.posts.findMany({
-        take: Number(howMany),
+        take: Number(howMany) + numberOfDeletedPosts,
         orderBy: {
           allPostsCounter: 'desc'
         },
@@ -1766,6 +1772,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
           }
         }
       });
+
     }
 
     const postsResponse: PostsResponse[] = [];
@@ -1970,8 +1977,6 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
     };
 
     const response = {
-      numberOfPosts: numberOfPosts,
-      numberOfPostsWitness: JSON.stringify(numberOfPostsWitness),
       postsResponse: postsResponse
     }
 
@@ -2608,6 +2613,20 @@ type RepostsResponse = {
   numberOfReposts: number,
   numberOfRepostsWitness: string
 }
+
+// ============================================================================
+
+type Posts = {
+  postKey: string;
+  posterAddress: string;
+  postContentID: string;
+  allPostsCounter: bigint;
+  userPostsCounter: bigint;
+  postBlockHeight: bigint;
+  deletionBlockHeight: bigint;
+  restorationBlockHeight: bigint;
+  postSignature: string;
+};
 
 // ============================================================================
 
