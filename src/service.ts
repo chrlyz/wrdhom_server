@@ -2017,18 +2017,26 @@ server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
       return { commentState: JSON.stringify(commentState)};
     }
 
-    const numberOfComments = (await prisma.comments.findMany({
+    const numberOfDeletedComments = (await prisma.comments.findMany({
+      take: Number(howMany),
+      orderBy: {
+        targetCommentsCounter: 'desc'
+      },
       where: {
         targetKey: targetKey,
         commentBlockHeight: {
+          not: 0,
+          gte: fromBlock,
+          lte: toBlock
+        },
+        deletionBlockHeight: {
           not: 0
         }
       }
     })).length;
-    const numberOfCommentsWitness = targetsCommentsCountersMap.getWitness(Field(targetKey)).toJSON();
 
     const comments = await prisma.comments.findMany({
-      take: Number(howMany),
+      take: Number(howMany) + numberOfDeletedComments,
       orderBy: {
         targetCommentsCounter: 'desc'
       },
@@ -2078,8 +2086,6 @@ server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
     };
 
     const response = {
-      numberOfComments: numberOfComments,
-      numberOfCommentsWitness: JSON.stringify(numberOfCommentsWitness),
       commentsResponse: commentsResponse
     }
 
