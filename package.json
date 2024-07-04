@@ -19,7 +19,6 @@
     "@fastify/schedule": "^4.1.1",
     "@prisma/client": "^5.16.1",
     "@web-std/file": "^3.0.3",
-    "@web3-storage/w3up-client": "^15.0.0",
     "bullmq": "^5.8.3",
     "dotenv": "^16.4.5",
     "fastify": "^4.28.1",
