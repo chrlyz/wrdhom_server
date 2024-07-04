@@ -4,7 +4,6 @@ import cors from '@fastify/cors';
 import { PrismaClient } from '@prisma/client';
 import { createFileEncoderStream, CAREncoderStream } from 'ipfs-car';
 import { Blob } from '@web-std/file';
-import { create } from '@web3-storage/w3up-client';
 import * as dotenv from 'dotenv';
 import { regeneratePostsZkAppState, regenerateReactionsZkAppState,
   regenerateCommentsZkAppState, regenerateRepostsZkAppState
@@ -31,12 +30,6 @@ dotenv.config();
 
 // Set up client for PostgreSQL for structured data
 const prisma = new PrismaClient();
-
-// Set up client for IPFS for unstructured data
-const web3storage = await create();
-console.log('Logging-in to web3.storage...');
-await web3storage.login(process.env.W3S_EMAIL as `${string}@${string}`);
-await web3storage.setCurrentSpace(process.env.W3S_SPACE as `did:${string}:${string}`);
 
 // ============================================================================
 
@@ -180,7 +173,7 @@ const reactionRestorations = await prisma.reactionRestorations.findMany({
 let totalNumberOfReactionRestorations = reactionRestorations.length;
 console.log('totalNumberOfReactionRestorations: ' + totalNumberOfReactionRestorations);
 
-// Get content and keep it locally for faster reponses
+// Create posts and comments content directories if they don't exist 
 
 try {
   await fs.access('./posts/');
@@ -194,20 +187,6 @@ try {
   }
 }
 
-for (const post of posts) {
-  try {
-    await fs.readFile('./posts/' + post.postContentID, 'utf8');
-  } catch (e: any) {
-      if (e.code === 'ENOENT') {
-        const contentResponse = await fetch('https://' + post.postContentID + '.ipfs.w3s.link');
-        const content = await contentResponse.text();
-        await fs.writeFile('./posts/' + post.postContentID, content, 'utf-8');
-      } else {
-          console.error(e);
-      }
-  }
-};
-
 try {
   await fs.access('./comments/');
   console.log('./comments/ directory exists');
@@ -219,20 +198,6 @@ try {
     console.error(e);
   }
 }
-
-for (const comment of comments) {
-  try {
-    await fs.readFile('./comments/' + comment.commentContentID, 'utf8');
-  } catch (e: any) {
-      if (e.code === 'ENOENT') {
-        const commentsContentResponse = await fetch('https://' + comment.commentContentID + '.ipfs.w3s.link');
-        const commentsContent = await commentsContentResponse.text();
-        await fs.writeFile('./comments/' + comment.commentContentID, commentsContent, 'utf-8');
-      } else {
-          console.error(e);
-      }
-  }
-};
 
 // ============================================================================
 
@@ -262,9 +227,6 @@ const syncStateTask = new AsyncTask(
       }
     });
     for (const pPost of pendingPosts) {
-      const postContentResponse = await fetch('https://' + pPost.postContentID + '.ipfs.w3s.link');
-      const postContent = await postContentResponse.text();
-      await fs.writeFile('./posts/' + pPost.postContentID, postContent, 'utf-8');
       console.log(pPost);
       const postState = new PostState({
         posterAddress: PublicKey.fromBase58(pPost.posterAddress),
@@ -340,9 +302,6 @@ const syncStateTask = new AsyncTask(
       }
     });
     for (const pComment of pendingComments) {
-      const commentContentResponse = await fetch('https://' + pComment.commentContentID + '.ipfs.w3s.link');
-      const commentContent = await commentContentResponse.text();
-      await fs.writeFile('./comments/' + pComment.commentContentID, commentContent, 'utf-8');
       const commenterAddress = PublicKey.fromBase58(pComment.commenterAddress);
       const commentContentIDAsCS = CircuitString.fromString(pComment.commentContentID);
       
@@ -783,7 +742,7 @@ server.post<{Body: SignedPost}>('/posts', async (request) => {
       const userPostsCounter = postsFromUser.length + 1;
       console.log('userPostsCounter: ' + userPostsCounter);
 
-      await web3storage.uploadFile(file);
+      await fs.writeFile('./posts/' + postCID, request.body.post, 'utf-8');
       await createSQLPost(postKey, signature, posterAddress, allPostsCounter, userPostsCounter, postCID);
       return {message: 'Valid Post!'};
     } else {
@@ -959,7 +918,7 @@ server.post<{Body: SignedComment}>('/comments', async (request) => {
       const targetCommentsCounter = commentsForTarget.length + 1;
       console.log('targetCommentsCounter: ' + targetCommentsCounter);
 
-      await web3storage.uploadFile(file);
+      await fs.writeFile('./comments/' + commentCID, request.body.comment, 'utf-8');
       await createSQLComment(commentKey, targetKey, request.body.signedData.publicKey,
         commentCID, allCommentsCounter, userCommentsCounter, targetCommentsCounter,
         request.body.signedData.signature);
