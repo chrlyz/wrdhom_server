@@ -12,6 +12,7 @@
   "keywords": [],
   "author": "chrlyz",
   "license": "MIT",
+  "private": true,
   "type": "module",
   "dependencies": {
     "@aurowallet/mina-provider": "^1.0.5",
