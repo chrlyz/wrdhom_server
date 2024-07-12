@@ -29,7 +29,7 @@ console.log(`${(endTime - startTime)/1000/60} minutes`);
 
 // ============================================================================
 
-const worker = new Worker('queue', async job => {
+const worker = new Worker('postsQueue', async job => {
 
     const transition = PostsTransition.fromJSON(JSON.parse(job.data.provePostInput.transition));
     const signature = Signature.fromBase58(job.data.provePostInput.signature);
@@ -62,7 +62,7 @@ const worker = new Worker('queue', async job => {
 
 // ============================================================================
 
-  const mergingWorker = new Worker('mergingQueue', async job => {
+  const mergingWorker = new Worker('mergingPostsQueue', async job => {
 
     const mergedTransition = PostsTransition.fromJSON(JSON.parse(job.data.mergedTransition));
     const proof1 = await PostsProof.fromJSON(JSON.parse(job.data.proof1));
@@ -78,15 +78,15 @@ const worker = new Worker('queue', async job => {
 
 const postDeletionsWorker = new Worker('postDeletionsQueue', async job => {
 
-  const transition = PostsTransition.fromJSON(JSON.parse(job.data.provePostDeletionInput.transition));
-  const signature = Signature.fromBase58(job.data.provePostDeletionInput.signature);
-  const currentAllPostsCounter = Field(job.data.provePostDeletionInput.currentAllPostsCounter);
-  const usersPostsCounters = Field(job.data.provePostDeletionInput.usersPostsCounters);
-  const initialPostState = PostState.fromJSON(JSON.parse(job.data.provePostDeletionInput.initialPostState)) as PostState;
-  const initialPosts = Field(job.data.provePostDeletionInput.initialPosts);
-  const latestPosts = Field(job.data.provePostDeletionInput.latestPosts);
-  const postWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.provePostDeletionInput.postWitness));
-  const deletionBlockHeight = Field(job.data.provePostDeletionInput.deletionBlockHeight);
+  const transition = PostsTransition.fromJSON(JSON.parse(job.data.provePostDeletionInputs.transition));
+  const signature = Signature.fromBase58(job.data.provePostDeletionInputs.signature);
+  const currentAllPostsCounter = Field(job.data.provePostDeletionInputs.currentAllPostsCounter);
+  const usersPostsCounters = Field(job.data.provePostDeletionInputs.usersPostsCounters);
+  const initialPostState = PostState.fromJSON(JSON.parse(job.data.provePostDeletionInputs.initialPostState)) as PostState;
+  const initialPosts = Field(job.data.provePostDeletionInputs.initialPosts);
+  const latestPosts = Field(job.data.provePostDeletionInputs.latestPosts);
+  const postWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.provePostDeletionInputs.postWitness));
+  const deletionBlockHeight = Field(job.data.provePostDeletionInputs.blockHeight);
   
   const proof = await Posts.provePostDeletionTransition(
     transition,
@@ -109,15 +109,15 @@ const postDeletionsWorker = new Worker('postDeletionsQueue', async job => {
 
 const postRestorationsWorker = new Worker('postRestorationsQueue', async job => {
 
-  const transition = PostsTransition.fromJSON(JSON.parse(job.data.inputs.transition));
-  const signature = Signature.fromBase58(job.data.inputs.signature);
-  const currentAllPostsCounter = Field(job.data.inputs.currentAllPostsCounter);
-  const usersPostsCounters = Field(job.data.inputs.usersPostsCounters);
-  const initialPostState = PostState.fromJSON(JSON.parse(job.data.inputs.initialPostState)) as PostState;
-  const initialPosts = Field(job.data.inputs.initialPosts);
-  const latestPosts = Field(job.data.inputs.latestPosts);
-  const postWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.inputs.postWitness));
-  const restorationBlockHeight = Field(job.data.inputs.restorationBlockHeight);
+  const transition = PostsTransition.fromJSON(JSON.parse(job.data.provePostRestorationInputs.transition));
+  const signature = Signature.fromBase58(job.data.provePostRestorationInputs.signature);
+  const currentAllPostsCounter = Field(job.data.provePostRestorationInputs.currentAllPostsCounter);
+  const usersPostsCounters = Field(job.data.provePostRestorationInputs.usersPostsCounters);
+  const initialPostState = PostState.fromJSON(JSON.parse(job.data.provePostRestorationInputs.initialPostState)) as PostState;
+  const initialPosts = Field(job.data.provePostRestorationInputs.initialPosts);
+  const latestPosts = Field(job.data.provePostRestorationInputs.latestPosts);
+  const postWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.provePostRestorationInputs.postWitness));
+  const restorationBlockHeight = Field(job.data.provePostRestorationInputs.blockHeight);
   
   const proof = await Posts.provePostRestorationTransition(
     transition,

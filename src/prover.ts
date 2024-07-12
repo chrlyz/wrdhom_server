@@ -10,7 +10,7 @@ import { Config, PostState, PostsTransition, Posts,
 } from 'wrdhom';
 import fs from 'fs/promises';
 import { performance } from 'perf_hooks';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import {
@@ -36,10 +36,10 @@ const connection = {
   port: 6379
 }
 
-const queue = new Queue('queue', {connection});
-const queueEvents = new QueueEvents('queue', {connection});
-const mergingQueue = new Queue('mergingQueue', {connection});
-const mergingQueueEvents = new QueueEvents('mergingQueue', {connection});
+const postsQueue = new Queue('postsQueue', {connection});
+const postsQueueEvents = new QueueEvents('postsQueue', {connection});
+const mergingPostsQueue = new Queue('mergingPostsQueue', {connection});
+const mergingPostsQueueEvents = new QueueEvents('mergingPostsQueue', {connection});
 const postDeletionsQueue = new Queue('postDeletionsQueue', {connection});
 const postDeletionsQueueEvents = new QueueEvents('postDeletionsQueue', {connection});
 const postRestorationsQueue = new Queue('postRestorationsQueue', {connection});
@@ -96,6 +96,7 @@ const postsContractAddress = PublicKey.fromBase58(postsContractKeysBase58.public
 const reactionsContractAddress = PublicKey.fromBase58(reactionsContractKeysBase58.publicKey);
 const commentsContractAddress = PublicKey.fromBase58(commentsContractKeysBase58.publicKey);
 const repostsContractAddress = PublicKey.fromBase58(repostsContractKeysBase58.publicKey);
+
 // Fetch accounts to make sure they are available on cache during the execution of the program
 await fetchAccount({ publicKey: feepayerKeysBase58.publicKey });
 await fetchAccount({ publicKey: postsContractKeysBase58.publicKey });
@@ -134,8 +135,8 @@ console.log(`${(endTime - startTime)/1000/60} minutes`);
 
 // Regenerate Merkle maps from database
 
-const usersPostsCountersMap = new MerkleMap();
-const postsMap = new MerkleMap();
+let usersPostsCountersMap = new MerkleMap();
+let postsMap = new MerkleMap();
 let totalNumberOfPosts = 0;
 
 const postsContext = {
@@ -206,176 +207,150 @@ const provingReactionDeletions = 10;
 const provingReactionRestorations = 11;
 let provingTurn = 0;
 
+const MAX_ATTEMPTS = Number(process.env.MAX_ATTEMPTS);
+const INTERVAL = Number(process.env.INTERVAL);
+
 while (true) {
   if (provingTurn === provingPosts) {
-  // Process pending posts to update on-chain state
 
-  const pendingPosts = await prisma.posts.findMany({
-    take: Number(process.env.PARALLEL_NUMBER),
-    orderBy: {
-        allPostsCounter: 'asc'
-    },
-    where: {
-        postBlockHeight: 0
-    }
-    });
-    postsContext.totalNumberOfPosts += pendingPosts.length;
-    console.log('Number of posts if update is successful: ' + postsContext.totalNumberOfPosts);
-    console.log('pendingPosts:');
-    console.log(pendingPosts);
-  
-    startTime = performance.now();
-  
-    const lastBlock = await fetchLastBlock(configPosts.url);
-    const postBlockHeight = lastBlock.blockchainLength.toBigint();
-    console.log(postBlockHeight);
+    let pendingPosts: PostsFindMany;
+    let provePostInputs: ProvePostInputs[] = [];
 
-    const provePostInputs: {
-      signature: string,
-      transition: string,
-      postState: string,
-      initialUsersPostsCounters: string,
-      latestUsersPostsCounters: string,
-      initialPosts: string,
-      latestPosts: string,
-      userPostsCounterWitness: string,
-      postWitness: string
-    }[] = [];
-  
-    for (const pPost of pendingPosts) {
-      const result = await generateProvePostInputs(
-        pPost.postSignature,
-        pPost.posterAddress,
-        pPost.postContentID,
-        pPost.allPostsCounter,
-        pPost.userPostsCounter,
-        postBlockHeight,
-        pPost.deletionBlockHeight,
-        pPost.restorationBlockHeight
-      );
-  
-      provePostInputs.push(result);
-    }
-
-    const jobsPromises: Promise<any>[] = [];
-
-    for (const provePostInput of provePostInputs) {
-      const job = await queue.add(
-        `job`,
-        { provePostInput: provePostInput }
-      );
-      jobsPromises.push(job.waitUntilFinished(queueEvents));
-    }
-
-    const transitionsAndProofsAsStrings: {
-      transition: string;
-      proof: string;
-    }[] = await Promise.all(jobsPromises);
-  
-    const transitionsAndProofs: {
-      transition: PostsTransition,
-      proof: PostsProof
-    }[] = [];
-
-    for (const transitionAndProof of transitionsAndProofsAsStrings) {
-      transitionsAndProofs.push({
-        transition: PostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-        proof: await PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
-      });
-    }
-
-    endTime = performance.now();
-    console.log(`${(endTime - startTime)/1000/60} minutes`);
-  
-    if (transitionsAndProofs.length !== 0) {
-      startTime = performance.now();
-      await updatePostsOnChainState(transitionsAndProofs);
-      endTime = performance.now();
-      console.log(`${(endTime - startTime)/1000/60} minutes`);
-  
-      let tries = 0;
-      const maxTries = 50;
-      let allPostsCounterFetch;
-      let usersPostsCountersFetch;
-      let postsFetch;
-      while (tries < maxTries) {
-        console.log('Pause to wait for the transaction to confirm...');
-        await delay(20000);
-  
-        allPostsCounterFetch = await postsContract.allPostsCounter.fetch();
-        console.log('allPostsCounterFetch: ' + allPostsCounterFetch?.toString());
-        usersPostsCountersFetch = await postsContract.usersPostsCounters.fetch();
-        console.log('usersPostsCountersFetch: ' + usersPostsCountersFetch?.toString());
-        postsFetch = await postsContract.posts.fetch();
-        console.log('postsFetch: ' + postsFetch?.toString());
-  
-        console.log(Field(postsContext.totalNumberOfPosts).toString());
-        console.log(usersPostsCountersMap.getRoot().toString());
-        console.log(postsMap.getRoot().toString());
-  
-        console.log(allPostsCounterFetch?.equals(Field(postsContext.totalNumberOfPosts)).toBoolean());
-        console.log(usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean());
-        console.log(postsFetch?.equals(postsMap.getRoot()).toBoolean());
-  
-        if (allPostsCounterFetch?.equals(Field(postsContext.totalNumberOfPosts)).toBoolean()
-        && usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean()
-        && postsFetch?.equals(postsMap.getRoot()).toBoolean()) {
-          for (const pPost of pendingPosts) {
-            const posterAddress = PublicKey.fromBase58(pPost.posterAddress);
-            const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
-            const postContentID = CircuitString.fromString(pPost.postContentID);
-            const postContentIDAsField = postContentID.hash();
-            const postKey = Poseidon.hash([posterAddressAsField, postContentIDAsField]);
-            await prisma.posts.update({
-                where: {
-                  postKey: postKey.toString()
-                },
-                data: {
-                  postBlockHeight: postBlockHeight
-                }
-            });
-          }
-          tries = maxTries;
-        }
-        // Reset initial state if transaction appears to have failed
-        if (tries === maxTries - 1) {
-          postsContext.totalNumberOfPosts -= pendingPosts.length;
-          console.log('Original number of posts: ' + postsContext.totalNumberOfPosts);
-  
-          const pendingPosters = new Set(pendingPosts.map( post => post.posterAddress));
-          for (const poster of pendingPosters) {
-            const userPosts = await prisma.posts.findMany({
-              where: { posterAddress: poster,
-                postBlockHeight: {
-                  not: 0
-                }
-              },
-              select: { userPostsCounter: true }
-            });
-            console.log(userPosts);
-            console.log('Initial usersPostsCountersMap root: ' + usersPostsCountersMap.getRoot().toString());
-            usersPostsCountersMap.set(
-              Poseidon.hash(PublicKey.fromBase58(poster).toFields()),
-              Field(userPosts.length)
-            );
-            console.log(userPosts.length);
-            console.log('Latest usersPostsCountersMap root: ' + usersPostsCountersMap.getRoot().toString());
-          };
-
-          pendingPosts.forEach( pPost => {
-            const posterAddress = PublicKey.fromBase58(pPost.posterAddress);
-            const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
-            const postContentID = CircuitString.fromString(pPost.postContentID);
-            console.log('Initial postsMap root: ' + postsMap.getRoot().toString());
-            postsMap.set(
-                Poseidon.hash([posterAddressAsField, postContentID.hash()]),
-                Field(0)
-            );
-            console.log('Latest postsMap root: ' + postsMap.getRoot().toString());
-          });
-        }
-        tries++;
+    // Get actions that may have a pending associated transaction
+    pendingPosts = await prisma.posts.findMany({
+      take: Number(process.env.PARALLEL_NUMBER),
+      orderBy: {
+          allPostsCounter: 'asc'
+      },
+      where: {
+          status: 'creating'
       }
+    });
+
+    // If there isn't a pending transaction, process new actions
+    if (pendingPosts.length === 0) {
+      pendingPosts = await prisma.posts.findMany({
+        take: Number(process.env.PARALLEL_NUMBER),
+        orderBy: {
+            allPostsCounter: 'asc'
+        },
+        where: {
+            status: 'create'
+        }
+      });
+      // Handle possible pending transaction confirmation or failure
+    } else {
+      postsContext.totalNumberOfPosts += pendingPosts.length;
+      for (const pPost of pendingPosts) {
+        const result = generateProvePostInputs(
+          pPost.pendingSignature!,
+          pPost.posterAddress,
+          pPost.postContentID,
+          pPost.allPostsCounter,
+          pPost.userPostsCounter,
+          pPost.pendingBlockHeight!,
+          pPost.deletionBlockHeight,
+          pPost.restorationBlockHeight
+        );
+        provePostInputs.push(result);
+      }
+      
+      try {
+        /* If a pending transaction was confirmed, syncing onchain and server state,
+          restart loop to process new actions
+        */
+        console.log('Syncing onchain and server state since last post publications:');
+        await assertPostsOnchainAndServerState(pendingPosts, pendingPosts[0].pendingBlockHeight!);
+        continue;
+      } catch (error: any) {
+          /* If a pending transaction hasn't been successfully confirmed,
+            reset server state to process the pending actions with a new blockheight
+          */
+         if (error.message.includes('There is a mismatch between onchain and server state')) {
+          await resetServerPostPublicationsState(pendingPosts);
+         } else {
+          console.log(error.message);
+         }
+      }
+    }
+
+    if (pendingPosts.length !== 0) {
+      postsContext.totalNumberOfPosts += pendingPosts.length;
+      const lastBlock = await fetchLastBlock(configPosts.url);
+      const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      console.log('Current blockheight for post publications: ' + currentBlockHeight);
+      provePostInputs.length = 0;
+      for (const pPost of pendingPosts) {
+        const result = generateProvePostInputs(
+          pPost.pendingSignature!,
+          pPost.posterAddress,
+          pPost.postContentID,
+          pPost.allPostsCounter,
+          pPost.userPostsCounter,
+          currentBlockHeight,
+          pPost.deletionBlockHeight,
+          pPost.restorationBlockHeight
+        );
+        provePostInputs.push(result);
+        pPost.status = 'creating';
+        await prisma.posts.update({
+          where: {
+            postKey: pPost.postKey
+          },
+          data: {
+            status: 'creating',
+            pendingBlockHeight: currentBlockHeight
+          }
+        });
+      }
+
+      const jobsPromises: Promise<any>[] = [];
+      for (const provePostInput of provePostInputs) {
+        const job = await postsQueue.add(
+          `job`,
+          { provePostInput: provePostInput }
+        );
+        jobsPromises.push(job.waitUntilFinished(postsQueueEvents));
+      }
+
+      startTime = performance.now();
+      const transitionsAndProofsAsStrings: {
+        transition: string;
+        proof: string;
+      }[] = await Promise.all(jobsPromises);
+      const transitionsAndProofs: {
+        transition: PostsTransition,
+        proof: PostsProof
+      }[] = [];
+      for (const transitionAndProof of transitionsAndProofsAsStrings) {
+        transitionsAndProofs.push({
+          transition: PostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
+          proof: await PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+        });
+      }
+      endTime = performance.now();
+      console.log(`Created ${pendingPosts.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
+    
+      startTime = performance.now();
+      const pendingTransaction = await updatePostsOnChainState(transitionsAndProofs);
+      endTime = performance.now();
+      console.log(`Merged ${pendingPosts.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
+
+      startTime = performance.now();
+      console.log('Confirming post publications transaction...');
+      let status = 'pending';
+      while (status === 'pending') {
+        status = await getTransactionStatus(pendingTransaction);
+      }
+      endTime = performance.now();
+      console.log(`Waited ${(endTime - startTime)/1000/60} minutes for transaction confirmation or rejection`);
+
+      if (status === 'rejected') {
+        await resetServerPostPublicationsState(pendingPosts);
+        continue;
+      }
+
+      await assertPostsOnchainAndServerState(pendingPosts, currentBlockHeight);
     }
 
   } else if (provingTurn === provingReactions) {
@@ -473,12 +448,11 @@ while (true) {
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
         let tries = 0;
-        const maxTries = 50;
         let allReactionsCounterFetch;
         let userReactionsCounterFetch;
         let targetReactionsCounterFetch;
         let reactionsFetch;
-        while (tries < maxTries) {
+        while (tries < MAX_ATTEMPTS) {
           console.log('Pause to wait for the transaction to confirm...');
           await delay(20000);
     
@@ -515,10 +489,10 @@ while (true) {
                   }
               });
             }
-            tries = maxTries;
+            tries = MAX_ATTEMPTS;
           }
           // Reset initial state if transaction appears to have failed
-          if (tries === maxTries - 1) {
+          if (tries === MAX_ATTEMPTS - 1) {
             reactionsContext.totalNumberOfReactions -= pendingReactions.length;
             console.log('Original number of reactions: ' + reactionsContext.totalNumberOfReactions);
     
@@ -668,12 +642,11 @@ while (true) {
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
         let tries = 0;
-        const maxTries = 50;
         let allCommentsCounterFetch;
         let userCommentsCounterFetch;
         let targetCommentsCounterFetch;
         let commentsFetch;
-        while (tries < maxTries) {
+        while (tries < MAX_ATTEMPTS) {
           console.log('Pause to wait for the transaction to confirm...');
           await delay(20000);
     
@@ -710,10 +683,10 @@ while (true) {
                   }
               });
             }
-            tries = maxTries;
+            tries = MAX_ATTEMPTS;
           }
           // Reset initial state if transaction appears to have failed
-          if (tries === maxTries - 1) {
+          if (tries === MAX_ATTEMPTS - 1) {
             commentsContext.totalNumberOfComments -= pendingComments.length;
             console.log('Original number of comments: ' + commentsContext.totalNumberOfComments);
     
@@ -863,12 +836,11 @@ while (true) {
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
         let tries = 0;
-        const maxTries = 50;
         let allRepostsCounterFetch;
         let userRepostsCounterFetch;
         let targetRepostsCounterFetch;
         let repostsFetch;
-        while (tries < maxTries) {
+        while (tries < MAX_ATTEMPTS) {
           console.log('Pause to wait for the transaction to confirm...');
           await delay(20000);
     
@@ -905,10 +877,10 @@ while (true) {
                   }
               });
             }
-            tries = maxTries;
+            tries = MAX_ATTEMPTS;
           }
           // Reset initial state if transaction appears to have failed
-          if (tries === maxTries - 1) {
+          if (tries === MAX_ATTEMPTS - 1) {
             repostsContext.totalNumberOfReposts -= pendingReposts.length;
             console.log('Original number of reposts: ' + repostsContext.totalNumberOfReposts);
     
@@ -965,363 +937,295 @@ while (true) {
       }
   } else if (provingTurn === provingPostDeletions) {
 
-    const pendingDeletions = await prisma.postDeletions.findMany({
-      take: Number(process.env.PARALLEL_NUMBER),
-      orderBy: {
-          allDeletionsCounter: 'asc'
-      },
-      where: {
-          deletionBlockHeight: 0
-      }
-      });
-      console.log('pendingDeletions:');
-      console.log(pendingDeletions);
-    
-      startTime = performance.now();
-    
-      const lastBlock = await fetchLastBlock(configPosts.url);
-      const deletionBlockHeight = lastBlock.blockchainLength.toBigint();
-      console.log(deletionBlockHeight);
-
-      const currentAllPostsCounter = await prisma.posts.count();
-
-      const provePostDeletionInputs: {
-        transition: string,
-        signature: string,
-        currentAllPostsCounter: string,
-        usersPostsCounters: string,
-        initialPosts: string,
-        latestPosts: string,
-        initialPostState: string,
-        postWitness: string,
-        deletionBlockHeight: string
-      }[] = [];
-    
-      for (const pDeletion of pendingDeletions) {
-
-        const target = await prisma.posts.findUnique({
-          where: {
-            postKey: pDeletion.targetKey
+     let pendingPostDeletions: PostsFindMany;
+     let provePostDeletionsInputs: ProvePostUpdateInputs[] = [];
+ 
+     // Get actions that may have a pending associated transaction
+     pendingPostDeletions = await prisma.posts.findMany({
+       take: Number(process.env.PARALLEL_NUMBER),
+       orderBy: {
+           allPostsCounter: 'asc'
+       },
+       where: {
+           status: 'deleting'
+       }
+     });
+ 
+     // If there isn't a pending transaction, process new actions
+     if (pendingPostDeletions.length === 0) {
+      pendingPostDeletions = await prisma.posts.findMany({
+         take: Number(process.env.PARALLEL_NUMBER),
+         orderBy: {
+             allPostsCounter: 'asc'
+         },
+         where: {
+             status: 'delete'
+         }
+       });
+       // Handle possible pending transaction confirmation or failure
+     } else {
+       for (const pendingPostDeletion of pendingPostDeletions) {
+         const result = generatePostDeletionInputs(
+          pendingPostDeletion!.posterAddress,
+          pendingPostDeletion!.postContentID,
+          pendingPostDeletion!.allPostsCounter,
+          pendingPostDeletion!.userPostsCounter,
+          pendingPostDeletion!.postBlockHeight,
+          pendingPostDeletion!.restorationBlockHeight,
+          Field(pendingPostDeletion!.postKey),
+          pendingPostDeletion.pendingSignature!,
+          Field(pendingPostDeletion.pendingBlockHeight!),
+          Field(postsContext.totalNumberOfPosts)
+         );
+         provePostDeletionsInputs.push(result);
+       }
+       
+       try {
+         /* If a pending transaction was confirmed, syncing onchain and server state,
+           restart loop to process new actions
+         */
+         console.log('Syncing onchain and server state since last post deletions:');
+         await assertPostsOnchainAndServerState(pendingPostDeletions, pendingPostDeletions[0].pendingBlockHeight!);
+         continue;
+       } catch (error: any) {
+           /* If a pending transaction hasn't been successfully confirmed,
+             reset server state to process the pending actions with a new blockheight
+           */
+          if (error.message.includes('There is a mismatch between onchain and server state')) {
+           await resetServerPostUpdatesState(pendingPostDeletions);
+          } else {
+           console.log(error.message);
           }
-        });
+       }
+     }
+ 
+     if (pendingPostDeletions.length !== 0) {
+       const lastBlock = await fetchLastBlock(configPosts.url);
+       const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+       console.log('Current blockheight for post deletions: ' + currentBlockHeight);
+       provePostDeletionsInputs.length = 0;
+       for (const pendingPostDeletion of pendingPostDeletions) {
+         const result = generatePostDeletionInputs(
+          pendingPostDeletion!.posterAddress,
+          pendingPostDeletion!.postContentID,
+          pendingPostDeletion!.allPostsCounter,
+          pendingPostDeletion!.userPostsCounter,
+          pendingPostDeletion!.postBlockHeight,
+          pendingPostDeletion!.restorationBlockHeight,
+          Field(pendingPostDeletion!.postKey),
+          pendingPostDeletion.pendingSignature!,
+          Field(currentBlockHeight),
+          Field(postsContext.totalNumberOfPosts)
+         );
+         provePostDeletionsInputs.push(result);
+         pendingPostDeletion.status = 'deleting';
+         await prisma.posts.update({
+           where: {
+             postKey: pendingPostDeletion.postKey
+           },
+           data: {
+             status: 'deleting',
+             pendingBlockHeight: currentBlockHeight
+           }
+         });
+       }
+ 
+       const jobsPromises: Promise<any>[] = [];
+       for (const provePostDeletionInputs of provePostDeletionsInputs) {
+         const job = await postDeletionsQueue.add(
+           `job`,
+           { provePostDeletionInputs: provePostDeletionInputs }
+         );
+         jobsPromises.push(job.waitUntilFinished(postDeletionsQueueEvents));
+       }
+ 
+       startTime = performance.now();
+       const transitionsAndProofsAsStrings: {
+         transition: string;
+         proof: string;
+       }[] = await Promise.all(jobsPromises);
+       const transitionsAndProofs: {
+         transition: PostsTransition,
+         proof: PostsProof
+       }[] = [];
+       for (const transitionAndProof of transitionsAndProofsAsStrings) {
+         transitionsAndProofs.push({
+           transition: PostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
+           proof: await PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
+         });
+       }
+       endTime = performance.now();
+       console.log(`Created ${pendingPostDeletions.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
+     
+       startTime = performance.now();
+       const pendingTransaction = await updatePostsOnChainState(transitionsAndProofs);
+       endTime = performance.now();
+       console.log(`Merged ${pendingPostDeletions.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
+ 
+       startTime = performance.now();
+       console.log('Confirming post deletions transaction...');
+       let status = 'pending';
+       while (status === 'pending') {
+         status = await getTransactionStatus(pendingTransaction);
+       }
+       endTime = performance.now();
+       console.log(`Waited ${(endTime - startTime)/1000/60} minutes for transaction confirmation or rejection`);
+ 
+       if (status === 'rejected') {
+         await resetServerPostUpdatesState(pendingPostDeletions);
+         continue;
+       }
+ 
+       await assertPostsOnchainAndServerState(pendingPostDeletions, currentBlockHeight);
+     }
 
-        const result = await generatePostDeletionInputs(
-          target!.posterAddress,
-          target!.postContentID,
-          target!.allPostsCounter,
-          target!.userPostsCounter,
-          target!.postBlockHeight,
-          target!.restorationBlockHeight,
-          Field(target!.postKey),
-          pDeletion.deletionSignature,
-          Field(deletionBlockHeight),
-          Field(currentAllPostsCounter)
-        );
-
-        provePostDeletionInputs.push(result);
-      }
-
-      const jobsPromises: Promise<any>[] = [];
-
-      for (const provePostDeletionInput of provePostDeletionInputs) {
-        const job = await postDeletionsQueue.add(
-          `job`,
-          { provePostDeletionInput: provePostDeletionInput }
-        );
-        jobsPromises.push(job.waitUntilFinished(postDeletionsQueueEvents));
-      }
-  
-      const transitionsAndProofsAsStrings: {
-        transition: string;
-        proof: string;
-      }[] = await Promise.all(jobsPromises);
-    
-      const transitionsAndProofs: {
-        transition: PostsTransition,
-        proof: PostsProof
-      }[] = [];
-
-      for (const transitionAndProof of transitionsAndProofsAsStrings) {
-        transitionsAndProofs.push({
-          transition: PostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-          proof: await PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
-        });
-      }
-  
-      endTime = performance.now();
-      console.log(`${(endTime - startTime)/1000/60} minutes`);
-
-      if (transitionsAndProofs.length !== 0) {
-        startTime = performance.now();
-        await updatePostsOnChainState(transitionsAndProofs);
-        endTime = performance.now();
-        console.log(`${(endTime - startTime)/1000/60} minutes`);
-    
-        let tries = 0;
-        const maxTries = 50;
-        let allPostsCounterFetch;
-        let usersPostsCountersFetch;
-        let postsFetch;
-        while (tries < maxTries) {
-          console.log('Pause to wait for the transaction to confirm...');
-          await delay(20000);
-    
-          allPostsCounterFetch = await postsContract.allPostsCounter.fetch();
-          console.log('allPostsCounterFetch: ' + allPostsCounterFetch?.toString());
-          usersPostsCountersFetch = await postsContract.usersPostsCounters.fetch();
-          console.log('usersPostsCountersFetch: ' + usersPostsCountersFetch?.toString());
-          postsFetch = await postsContract.posts.fetch();
-          console.log('postsFetch: ' + postsFetch?.toString());
-    
-          console.log(Field(postsContext.totalNumberOfPosts).toString());
-          console.log(usersPostsCountersMap.getRoot().toString());
-          console.log(postsMap.getRoot().toString());
-    
-          console.log(allPostsCounterFetch?.equals(Field(postsContext.totalNumberOfPosts)).toBoolean());
-          console.log(usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean());
-          console.log(postsFetch?.equals(postsMap.getRoot()).toBoolean());
-    
-          if (allPostsCounterFetch?.equals(Field(postsContext.totalNumberOfPosts)).toBoolean()
-          && usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean()
-          && postsFetch?.equals(postsMap.getRoot()).toBoolean()) {
-            for (const pDeletion of pendingDeletions) {
-              await prisma.posts.update({
-                  where: {
-                    postKey: pDeletion.targetKey
-                  },
-                  data: {
-                    deletionBlockHeight: deletionBlockHeight
-                  }
-              });
-
-              await prisma.postDeletions.update({
-                where: {
-                  allDeletionsCounter: pDeletion.allDeletionsCounter
-                },
-                data: {
-                  deletionBlockHeight: deletionBlockHeight
-                }
-              });
-            }
-            tries = maxTries;
-          }
-          // Reset initial state if transaction appears to have failed
-          if (tries === maxTries - 1) {
-
-            for (const pDeletion of pendingDeletions) {
-
-              const target = await prisma.posts.findUnique({
-                where: {
-                  postKey: pDeletion.targetKey
-                }
-              });
-
-              const posterAddress = PublicKey.fromBase58(target!.posterAddress);
-              const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
-              const postContentID = CircuitString.fromString(target!.postContentID);
-
-              const restoredTargetState = new PostState({
-                posterAddress: posterAddress,
-                postContentID: postContentID,
-                allPostsCounter: Field(target!.allPostsCounter),
-                userPostsCounter: Field(target!.userPostsCounter),
-                postBlockHeight: Field(target!.postBlockHeight),
-                deletionBlockHeight: Field(target!.deletionBlockHeight),
-                restorationBlockHeight: Field(target!.restorationBlockHeight)
-              });
-
-              console.log('Initial postsMap root: ' + postsMap.getRoot().toString());
-              postsMap.set(
-                  Poseidon.hash([posterAddressAsField, postContentID.hash()]),
-                  restoredTargetState.hash()
-              );
-              console.log('Latest postsMap root: ' + postsMap.getRoot().toString());
-            }
-          }
-          tries++;
-        }
-      }
   }  else if (provingTurn === provingPostRestorations) {
 
-    const pendingRestorations = await prisma.postRestorations.findMany({
+
+    let pendingPostRestorations: PostsFindMany;
+    let provePostRestorationsInputs: ProvePostUpdateInputs[] = [];
+
+    // Get actions that may have a pending associated transaction
+    pendingPostRestorations = await prisma.posts.findMany({
       take: Number(process.env.PARALLEL_NUMBER),
       orderBy: {
-          allRestorationsCounter: 'asc'
+          allPostsCounter: 'asc'
       },
       where: {
-          restorationBlockHeight: 0
+          status: 'restoring'
       }
+    });
+
+    // If there isn't a pending transaction, process new actions
+    if (pendingPostRestorations.length === 0) {
+      pendingPostRestorations = await prisma.posts.findMany({
+        take: Number(process.env.PARALLEL_NUMBER),
+        orderBy: {
+            allPostsCounter: 'asc'
+        },
+        where: {
+            status: 'restore'
+        }
       });
-      console.log('pendingRestorations:');
-      console.log(pendingRestorations);
-    
-      startTime = performance.now();
-    
+      // Handle possible pending transaction confirmation or failure
+    } else {
+      for (const pendingPostRestoration of pendingPostRestorations) {
+        const result = generatePostRestorationInputs(
+          pendingPostRestoration!.posterAddress,
+          pendingPostRestoration!.postContentID,
+          pendingPostRestoration!.allPostsCounter,
+          pendingPostRestoration!.userPostsCounter,
+          pendingPostRestoration!.postBlockHeight,
+          pendingPostRestoration!.deletionBlockHeight,
+          pendingPostRestoration!.restorationBlockHeight,
+          Field(pendingPostRestoration!.postKey),
+          pendingPostRestoration.pendingSignature!,
+          Field(pendingPostRestoration.pendingBlockHeight!),
+          Field(postsContext.totalNumberOfPosts)
+        );
+        provePostRestorationsInputs.push(result);
+      }
+      
+      try {
+        /* If a pending transaction was confirmed, syncing onchain and server state,
+          restart loop to process new actions
+        */
+        console.log('Syncing onchain and server state since last post restorations:');
+        await assertPostsOnchainAndServerState(pendingPostRestorations, pendingPostRestorations[0].pendingBlockHeight!);
+        continue;
+      } catch (error: any) {
+          /* If a pending transaction hasn't been successfully confirmed,
+            reset server state to process the pending actions with a new blockheight
+          */
+         if (error.message.includes('There is a mismatch between onchain and server state')) {
+          await resetServerPostUpdatesState(pendingPostRestorations);
+         } else {
+          console.log(error.message);
+         }
+      }
+    }
+
+    if (pendingPostRestorations.length !== 0) {
       const lastBlock = await fetchLastBlock(configPosts.url);
-      const restorationBlockHeight = lastBlock.blockchainLength.toBigint();
-      console.log(restorationBlockHeight);
-
-      const currentAllPostsCounter = await prisma.posts.count();
-
-      const inputs: {
-        transition: string,
-        signature: string,
-        currentAllPostsCounter: string,
-        usersPostsCounters: string,
-        initialPosts: string,
-        latestPosts: string,
-        initialPostState: string,
-        postWitness: string,
-        restorationBlockHeight: string
-      }[] = [];
-    
-      for (const pRestoration of pendingRestorations) {
-
-        const target = await prisma.posts.findUnique({
+      const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      console.log('Current blockheight for post restorations: ' + currentBlockHeight);
+      provePostRestorationsInputs.length = 0;
+      for (const pendingPostRestoration of pendingPostRestorations) {
+        const result = generatePostRestorationInputs(
+          pendingPostRestoration!.posterAddress,
+          pendingPostRestoration!.postContentID,
+          pendingPostRestoration!.allPostsCounter,
+          pendingPostRestoration!.userPostsCounter,
+          pendingPostRestoration!.postBlockHeight,
+          pendingPostRestoration!.deletionBlockHeight,
+          pendingPostRestoration!.restorationBlockHeight,
+          Field(pendingPostRestoration!.postKey),
+          pendingPostRestoration.pendingSignature!,
+          Field(currentBlockHeight),
+          Field(postsContext.totalNumberOfPosts)
+        );
+        provePostRestorationsInputs.push(result);
+        pendingPostRestoration.status = 'restoring';
+        await prisma.posts.update({
           where: {
-            postKey: pRestoration.targetKey
+            postKey: pendingPostRestoration.postKey
+          },
+          data: {
+            status: 'restoring',
+            pendingBlockHeight: currentBlockHeight
           }
         });
-
-        const result = await generatePostRestorationInputs(
-          target!.posterAddress,
-          target!.postContentID,
-          target!.allPostsCounter,
-          target!.userPostsCounter,
-          target!.postBlockHeight,
-          target!.deletionBlockHeight,
-          target!.restorationBlockHeight,
-          Field(target!.postKey),
-          pRestoration.restorationSignature,
-          Field(restorationBlockHeight),
-          Field(currentAllPostsCounter)
-        );
-
-        inputs.push(result);
       }
 
       const jobsPromises: Promise<any>[] = [];
-
-      for (const input of inputs) {
+      for (const provePostRestorationInputs of provePostRestorationsInputs) {
         const job = await postRestorationsQueue.add(
           `job`,
-          { inputs: input }
+          { provePostRestorationInputs: provePostRestorationInputs }
         );
         jobsPromises.push(job.waitUntilFinished(postRestorationsQueueEvents));
       }
-  
+
+      startTime = performance.now();
       const transitionsAndProofsAsStrings: {
         transition: string;
         proof: string;
       }[] = await Promise.all(jobsPromises);
-    
       const transitionsAndProofs: {
         transition: PostsTransition,
         proof: PostsProof
       }[] = [];
-
       for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: PostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
           proof: await PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
       }
-  
       endTime = performance.now();
-      console.log(`${(endTime - startTime)/1000/60} minutes`);
-
-
-      if (transitionsAndProofs.length !== 0) {
-        startTime = performance.now();
-        await updatePostsOnChainState(transitionsAndProofs);
-        endTime = performance.now();
-        console.log(`${(endTime - startTime)/1000/60} minutes`);
+      console.log(`Created ${pendingPostRestorations.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
     
-        let tries = 0;
-        const maxTries = 50;
-        let allPostsCounterFetch;
-        let usersPostsCountersFetch;
-        let postsFetch;
-        while (tries < maxTries) {
-          console.log('Pause to wait for the transaction to confirm...');
-          await delay(20000);
-    
-          allPostsCounterFetch = await postsContract.allPostsCounter.fetch();
-          console.log('allPostsCounterFetch: ' + allPostsCounterFetch?.toString());
-          usersPostsCountersFetch = await postsContract.usersPostsCounters.fetch();
-          console.log('usersPostsCountersFetch: ' + usersPostsCountersFetch?.toString());
-          postsFetch = await postsContract.posts.fetch();
-          console.log('postsFetch: ' + postsFetch?.toString());
-    
-          console.log(Field(postsContext.totalNumberOfPosts).toString());
-          console.log(usersPostsCountersMap.getRoot().toString());
-          console.log(postsMap.getRoot().toString());
-    
-          console.log(allPostsCounterFetch?.equals(Field(postsContext.totalNumberOfPosts)).toBoolean());
-          console.log(usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean());
-          console.log(postsFetch?.equals(postsMap.getRoot()).toBoolean());
-    
-          if (allPostsCounterFetch?.equals(Field(postsContext.totalNumberOfPosts)).toBoolean()
-          && usersPostsCountersFetch?.equals(usersPostsCountersMap.getRoot()).toBoolean()
-          && postsFetch?.equals(postsMap.getRoot()).toBoolean()) {
-            for (const pRestoration of pendingRestorations) {
-              await prisma.posts.update({
-                  where: {
-                    postKey: pRestoration.targetKey
-                  },
-                  data: {
-                    deletionBlockHeight: 0,
-                    restorationBlockHeight: restorationBlockHeight
-                  }
-              });
+      startTime = performance.now();
+      const pendingTransaction = await updatePostsOnChainState(transitionsAndProofs);
+      endTime = performance.now();
+      console.log(`Merged ${pendingPostRestorations.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
 
-              await prisma.postRestorations.update({
-                where: {
-                  allRestorationsCounter: pRestoration.allRestorationsCounter
-                },
-                data: {
-                  restorationBlockHeight: restorationBlockHeight
-                }
-              });
-            }
-            tries = maxTries;
-          }
-          // Reset initial state if transaction appears to have failed
-          if (tries === maxTries - 1) {
-
-            for (const pRestoration of pendingRestorations) {
-
-              const target = await prisma.posts.findUnique({
-                where: {
-                  postKey: pRestoration.targetKey
-                }
-              });
-
-              const posterAddress = PublicKey.fromBase58(target!.posterAddress);
-              const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
-              const postContentID = CircuitString.fromString(target!.postContentID);
-
-              const restoredTargetState = new PostState({
-                posterAddress: posterAddress,
-                postContentID: postContentID,
-                allPostsCounter: Field(target!.allPostsCounter),
-                userPostsCounter: Field(target!.userPostsCounter),
-                postBlockHeight: Field(target!.postBlockHeight),
-                deletionBlockHeight: Field(target!.deletionBlockHeight),
-                restorationBlockHeight: Field(target!.restorationBlockHeight)
-              });
-
-              console.log('Initial postsMap root: ' + postsMap.getRoot().toString());
-              postsMap.set(
-                  Poseidon.hash([posterAddressAsField, postContentID.hash()]),
-                  restoredTargetState.hash()
-              );
-              console.log('Latest postsMap root: ' + postsMap.getRoot().toString());
-            }
-          }
-          tries++;
-        }
+      startTime = performance.now();
+      console.log('Confirming post restorations transaction...');
+      let status = 'pending';
+      while (status === 'pending') {
+        status = await getTransactionStatus(pendingTransaction);
       }
+      endTime = performance.now();
+      console.log(`Waited ${(endTime - startTime)/1000/60} minutes for transaction confirmation or rejection`);
+
+      if (status === 'rejected') {
+        await resetServerPostUpdatesState(pendingPostRestorations);
+        continue;
+      }
+
+      await assertPostsOnchainAndServerState(pendingPostRestorations, currentBlockHeight);
+    }
+
   } else if (provingTurn === provingCommentDeletions) {
 
     const pendingCommentDeletions = await prisma.commentDeletions.findMany({
@@ -1374,7 +1278,7 @@ while (true) {
           }
         });
 
-        const result = await generateProveCommentDeletionInputs(
+        const result = generateProveCommentDeletionInputs(
           parent,
           comment!.isTargetPost,
           comment!.targetKey,
@@ -1431,12 +1335,11 @@ while (true) {
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
         let tries = 0;
-        const maxTries = 50;
         let allCommentsCounterFetch;
         let usersCommentsCountersFetch;
         let targetsCommentsCountersFetch;
         let commentsFetch;
-        while (tries < maxTries) {
+        while (tries < MAX_ATTEMPTS) {
           console.log('Pause to wait for the transaction to confirm...');
           await delay(20000);
     
@@ -1482,10 +1385,10 @@ while (true) {
                 }
               });
             }
-            tries = maxTries;
+            tries = MAX_ATTEMPTS;
           }
           // Reset initial state if transaction appears to have failed
-          if (tries === maxTries - 1) {
+          if (tries === MAX_ATTEMPTS - 1) {
 
             for (const pDeletion of pendingCommentDeletions) {
 
@@ -1575,7 +1478,7 @@ while (true) {
           }
         });
 
-        const result = await generateProveCommentRestorationInputs(
+        const result = generateProveCommentRestorationInputs(
           parent,
           comment!.isTargetPost,
           comment!.targetKey,
@@ -1633,12 +1536,11 @@ while (true) {
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
         let tries = 0;
-        const maxTries = 50;
         let allCommentsCounterFetch;
         let usersCommentsCountersFetch;
         let targetsCommentsCountersFetch;
         let commentsFetch;
-        while (tries < maxTries) {
+        while (tries < MAX_ATTEMPTS) {
           console.log('Pause to wait for the transaction to confirm...');
           await delay(20000);
     
@@ -1685,10 +1587,10 @@ while (true) {
                 }
               });
             }
-            tries = maxTries;
+            tries = MAX_ATTEMPTS;
           }
           // Reset initial state if transaction appears to have failed
-          if (tries === maxTries - 1) {
+          if (tries === MAX_ATTEMPTS - 1) {
 
             for (const pRestoration of pendingCommentRestorations) {
 
@@ -1778,7 +1680,7 @@ while (true) {
           }
         });
 
-        const result = await generateProveRepostDeletionInputs(
+        const result = generateProveRepostDeletionInputs(
           parent,
           repost!.isTargetPost,
           repost!.targetKey,
@@ -1834,12 +1736,11 @@ while (true) {
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
         let tries = 0;
-        const maxTries = 50;
         let allRepostsCounterFetch;
         let usersRepostsCountersFetch;
         let targetsRepostsCountersFetch;
         let repostsFetch;
-        while (tries < maxTries) {
+        while (tries < MAX_ATTEMPTS) {
           console.log('Pause to wait for the transaction to confirm...');
           await delay(20000);
     
@@ -1885,10 +1786,10 @@ while (true) {
                 }
               });
             }
-            tries = maxTries;
+            tries = MAX_ATTEMPTS;
           }
           // Reset initial state if transaction appears to have failed
-          if (tries === maxTries - 1) {
+          if (tries === MAX_ATTEMPTS - 1) {
 
             for (const pDeletion of pendingRepostDeletions) {
 
@@ -1976,7 +1877,7 @@ while (true) {
           }
         });
 
-        const result = await generateProveRepostRestoration(
+        const result = generateProveRepostRestoration(
           parent,
           repost!.isTargetPost,
           repost!.targetKey,
@@ -2033,12 +1934,11 @@ while (true) {
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
         let tries = 0;
-        const maxTries = 50;
         let allRepostsCounterFetch;
         let usersRepostsCountersFetch;
         let targetsRepostsCountersFetch;
         let repostsFetch;
-        while (tries < maxTries) {
+        while (tries < MAX_ATTEMPTS) {
           console.log('Pause to wait for the transaction to confirm...');
           await delay(20000);
     
@@ -2085,10 +1985,10 @@ while (true) {
                 }
               });
             }
-            tries = maxTries;
+            tries = MAX_ATTEMPTS;
           }
           // Reset initial state if transaction appears to have failed
-          if (tries === maxTries - 1) {
+          if (tries === MAX_ATTEMPTS - 1) {
 
             for (const pRestoration of pendingRepostRestorations) {
 
@@ -2176,7 +2076,7 @@ while (true) {
           }
         });
 
-        const result = await generateReactionDeletionInputs(
+        const result = generateReactionDeletionInputs(
           parent,
           reaction!.isTargetPost,
           reaction!.targetKey,
@@ -2233,12 +2133,11 @@ while (true) {
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
         let tries = 0;
-        const maxTries = 50;
         let allReactionsCounterFetch;
         let usersReactionsCountersFetch;
         let targetsReactionsCountersFetch;
         let reactionsFetch;
-        while (tries < maxTries) {
+        while (tries < MAX_ATTEMPTS) {
           console.log('Pause to wait for the transaction to confirm...');
           await delay(20000);
     
@@ -2284,10 +2183,10 @@ while (true) {
                 }
               });
             }
-            tries = maxTries;
+            tries = MAX_ATTEMPTS;
           }
           // Reset initial state if transaction appears to have failed
-          if (tries === maxTries - 1) {
+          if (tries === MAX_ATTEMPTS - 1) {
 
             for (const pDeletion of pendingReactionDeletions) {
 
@@ -2377,7 +2276,7 @@ while (true) {
           }
         });
 
-        const result = await generateReactionRestorationInputs(
+        const result = generateReactionRestorationInputs(
           parent,
           reaction!.isTargetPost,
           reaction!.targetKey,
@@ -2435,12 +2334,11 @@ while (true) {
         console.log(`${(endTime - startTime)/1000/60} minutes`);
     
         let tries = 0;
-        const maxTries = 50;
         let allReactionsCounterFetch;
         let usersReactionsCountersFetch;
         let targetsReactionsCountersFetch;
         let reactionsFetch;
-        while (tries < maxTries) {
+        while (tries < MAX_ATTEMPTS) {
           console.log('Pause to wait for the transaction to confirm...');
           await delay(20000);
     
@@ -2487,10 +2385,10 @@ while (true) {
                 }
               });
             }
-            tries = maxTries;
+            tries = MAX_ATTEMPTS;
           }
           // Reset initial state if transaction appears to have failed
-          if (tries === maxTries - 1) {
+          if (tries === MAX_ATTEMPTS - 1) {
 
             for (const pRestoration of pendingReactionRestorations) {
 
@@ -2539,7 +2437,7 @@ while (true) {
 
 // ============================================================================
 
-async function generateProvePostInputs(signatureBase58: string, posterAddressBase58: string,
+function generateProvePostInputs(signatureBase58: string, posterAddressBase58: string,
   postCID: string, allPostsCounter: bigint, userPostsCounter: bigint,
   postBlockHeight: bigint, deletionBlockHeight: bigint, restorationBlockHeight: bigint) {
 
@@ -2582,7 +2480,6 @@ async function generateProvePostInputs(signatureBase58: string, posterAddressBas
         postState,
         postWitness
       );
-      console.log('Transition created');
 
       return {
         signature: signatureBase58,
@@ -2608,14 +2505,14 @@ async function updatePostsOnChainState(transitionsAndProofs: PostTransitionAndPr
 
   async function mergeTransitionsAndProofs(tp1: PostTransitionAndProof, tp2: PostTransitionAndProof) {
     const mergedTransition = PostsTransition.mergePostsTransitions(tp1.transition, tp2.transition);
-    const job = await mergingQueue.add(
+    const job = await mergingPostsQueue.add(
       `job`,
       { mergedTransition: JSON.stringify(mergedTransition),
         proof1: JSON.stringify(tp1.proof.toJSON()),
         proof2: JSON.stringify(tp2.proof.toJSON())
       }
     );
-    return job.waitUntilFinished(mergingQueueEvents);
+    return job.waitUntilFinished(mergingPostsQueueEvents);
   }
 
   async function recursiveMerge(transitionsAndProofs: PostTransitionAndProof[]): Promise<PostTransitionAndProof> {
@@ -3188,7 +3085,7 @@ async function updateRepostsOnChainState(transitionsAndProofs: RepostTransitionA
 
 // ============================================================================
 
-async function generatePostDeletionInputs(posterAddressBase58: string,
+function generatePostDeletionInputs(posterAddressBase58: string,
   postCID: string, allPostsCounter: bigint, userPostsCounter: bigint,
   postBlockHeight: bigint, restorationBlockHeight: bigint,
   postKey: Field, signatureBase58: string, deletionBlockHeight: Field,
@@ -3235,7 +3132,6 @@ async function generatePostDeletionInputs(posterAddressBase58: string,
         postWitness,
         deletionBlockHeight
       );
-      console.log('Transition created');
 
       return {
         transition: JSON.stringify(transition),
@@ -3246,13 +3142,13 @@ async function generatePostDeletionInputs(posterAddressBase58: string,
         latestPosts: latestPosts.toString(),
         initialPostState: JSON.stringify(initialPostState),
         postWitness: JSON.stringify(postWitness.toJSON()),
-        deletionBlockHeight: deletionBlockHeight.toString()
+        blockHeight: deletionBlockHeight.toString()
       }
 }
 
 // ============================================================================
 
-async function generatePostRestorationInputs(posterAddressBase58: string,
+function generatePostRestorationInputs(posterAddressBase58: string,
   postCID: string, allPostsCounter: bigint, userPostsCounter: bigint,
   postBlockHeight: bigint, deletionBlockHeight: bigint, restorationBlockHeight: bigint,
   postKey: Field, signatureBase58: string, newRestorationBlockHeight: Field,
@@ -3299,7 +3195,6 @@ async function generatePostRestorationInputs(posterAddressBase58: string,
         postWitness,
         newRestorationBlockHeight
       );
-      console.log('Transition created');
 
       return {
         transition: JSON.stringify(transition),
@@ -3310,23 +3205,13 @@ async function generatePostRestorationInputs(posterAddressBase58: string,
         latestPosts: latestPosts.toString(),
         initialPostState: JSON.stringify(initialPostState),
         postWitness: JSON.stringify(postWitness.toJSON()),
-        restorationBlockHeight: newRestorationBlockHeight.toString()
+        blockHeight: newRestorationBlockHeight.toString()
       }
 }
 
 // ============================================================================
 
-async function generateProveCommentDeletionInputs(parent: {
-    postKey: string;
-    posterAddress: string;
-    postContentID: string;
-    allPostsCounter: bigint;
-    userPostsCounter: bigint;
-    postBlockHeight: bigint;
-    deletionBlockHeight: bigint;
-    restorationBlockHeight: bigint;
-    postSignature: string;
-  } | null,
+function generateProveCommentDeletionInputs(parent: PostsFindUnique,
   isTargetPost: boolean, targetKey: string, commenterAddressBase58: string,
   commentCID: string, allCommentsCounter: bigint, userCommentsCounter: bigint, targetCommentsCounter: bigint,
   commentBlockHeight: bigint, restorationBlockHeight: bigint, commentKey: Field, signatureBase58: string,
@@ -3417,17 +3302,7 @@ async function generateProveCommentDeletionInputs(parent: {
 
 // ============================================================================
 
-async function generateProveCommentRestorationInputs(parent: {
-  postKey: string;
-  posterAddress: string;
-  postContentID: string;
-  allPostsCounter: bigint;
-  userPostsCounter: bigint;
-  postBlockHeight: bigint;
-  deletionBlockHeight: bigint;
-  restorationBlockHeight: bigint;
-  postSignature: string;
-} | null,
+function generateProveCommentRestorationInputs(parent: PostsFindUnique,
 isTargetPost: boolean, targetKey: string, commenterAddressBase58: string,
 commentCID: string, allCommentsCounter: bigint, userCommentsCounter: bigint, targetCommentsCounter: bigint,
 commentBlockHeight: bigint, deletionBlockHeight: bigint, restorationBlockHeight: bigint, commentKey: Field, signatureBase58: string,
@@ -3518,17 +3393,7 @@ const commentCIDAsCircuitString = CircuitString.fromString(commentCID.toString()
   
 // ============================================================================
 
-async function generateProveRepostDeletionInputs(parent: {
-  postKey: string;
-  posterAddress: string;
-  postContentID: string;
-  allPostsCounter: bigint;
-  userPostsCounter: bigint;
-  postBlockHeight: bigint;
-  deletionBlockHeight: bigint;
-  restorationBlockHeight: bigint;
-  postSignature: string;
-} | null,
+function generateProveRepostDeletionInputs(parent: PostsFindUnique,
 isTargetPost: boolean, targetKey: string, reposterAddressBase58: string, allRepostsCounter: bigint,
 userRepostsCounter: bigint, targetRepostsCounter: bigint, repostBlockHeight: bigint,
 restorationBlockHeight: bigint, repostKey: Field, signatureBase58: string,
@@ -3616,17 +3481,7 @@ const reposterAddress = PublicKey.fromBase58(reposterAddressBase58);
 
 // ============================================================================
 
-async function generateProveRepostRestoration(parent: {
-  postKey: string;
-  posterAddress: string;
-  postContentID: string;
-  allPostsCounter: bigint;
-  userPostsCounter: bigint;
-  postBlockHeight: bigint;
-  deletionBlockHeight: bigint;
-  restorationBlockHeight: bigint;
-  postSignature: string;
-} | null,
+function generateProveRepostRestoration(parent: PostsFindUnique,
 isTargetPost: boolean, targetKey: string, reposterAddressBase58: string,
 allRepostsCounter: bigint, userRepostsCounter: bigint, targetRepostsCounter: bigint, repostBlockHeight: bigint,
 deletionBlockHeight: bigint, restorationBlockHeight: bigint, repostKey: Field,
@@ -3714,17 +3569,7 @@ const reposterAddress = PublicKey.fromBase58(reposterAddressBase58);
 
 // ============================================================================
 
-async function generateReactionDeletionInputs(parent: {
-  postKey: string;
-  posterAddress: string;
-  postContentID: string;
-  allPostsCounter: bigint;
-  userPostsCounter: bigint;
-  postBlockHeight: bigint;
-  deletionBlockHeight: bigint;
-  restorationBlockHeight: bigint;
-  postSignature: string;
-} | null,
+function generateReactionDeletionInputs(parent: PostsFindUnique,
 isTargetPost: boolean, targetKey: string, reactorAddressBase58: string,
 reactionCodePoint: bigint, allReactionsCounter: bigint, userReactionsCounter: bigint, targetReactionsCounter: bigint,
 reactionBlockHeight: bigint, restorationBlockHeight: bigint, reactionKey: Field, signatureBase58: string,
@@ -3815,17 +3660,7 @@ const reactionCodePointAsField = Field(reactionCodePoint);
 
 // ============================================================================
 
-async function generateReactionRestorationInputs(parent: {
-  postKey: string;
-  posterAddress: string;
-  postContentID: string;
-  allPostsCounter: bigint;
-  userPostsCounter: bigint;
-  postBlockHeight: bigint;
-  deletionBlockHeight: bigint;
-  restorationBlockHeight: bigint;
-  postSignature: string;
-} | null,
+function generateReactionRestorationInputs(parent: PostsFindUnique,
 isTargetPost: boolean, targetKey: string, reactorAddressBase58: string,
 reactionCodePoint: bigint, allReactionsCounter: bigint, userReactionsCounter: bigint, targetReactionsCounter: bigint,
 reactionBlockHeight: bigint, deletionBlockHeight: bigint, restorationBlockHeight: bigint, reactionKey: Field, signatureBase58: string,
@@ -3918,6 +3753,192 @@ const reactionCodePointAsField = Field(reactionCodePoint);
 
   async function delay(ms: number) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ============================================================================
+
+type ProvePostInputs = {
+  signature: string,
+  transition: string,
+  postState: string,
+  initialUsersPostsCounters: string,
+  latestUsersPostsCounters: string,
+  initialPosts: string,
+  latestPosts: string,
+  userPostsCounterWitness: string,
+  postWitness: string
+}
+
+type ProvePostUpdateInputs = {
+  transition: string,
+  signature: string,
+  currentAllPostsCounter: string,
+  usersPostsCounters: string,
+  initialPosts: string,
+  latestPosts: string,
+  initialPostState: string,
+  postWitness: string,
+  blockHeight: string
+}
+
+// ============================================================================
+
+type PostsFindMany = Prisma.PromiseReturnType<typeof prisma.posts.findMany>;
+
+type PostsFindUnique = Prisma.PromiseReturnType<typeof prisma.posts.findUnique>;
+
+// ============================================================================
+
+async function assertPostsOnchainAndServerState(pendingPosts: PostsFindMany, blockHeight: bigint) {
+
+  const allPostsCounterFetch = await postsContract.allPostsCounter.fetch();
+  console.log('allPostsCounterFetch: ' + allPostsCounterFetch!.toString());
+  const usersPostsCountersFetch = await postsContract.usersPostsCounters.fetch();
+  console.log('usersPostsCountersFetch: ' + usersPostsCountersFetch!.toString());
+  const postsFetch = await postsContract.posts.fetch();
+  console.log('postsFetch: ' + postsFetch!.toString());
+
+  const allPostsCounterAfter = Field(postsContext.totalNumberOfPosts);
+  console.log('allPostsCounterAfter: ' + allPostsCounterAfter.toString());
+  const usersPostsCountersAfter = usersPostsCountersMap.getRoot();
+  console.log('usersPostsCountersAfter: ' + usersPostsCountersAfter.toString());
+  const postsAfter = postsMap.getRoot();
+  console.log('postsAfter: ' + postsAfter.toString());
+
+  const allPostsCounterEqual = allPostsCounterFetch!.equals(allPostsCounterAfter).toBoolean();
+  console.log('allPostsCounterEqual: ' + allPostsCounterEqual);
+  const usersPostsCountersEqual = usersPostsCountersFetch!.equals(usersPostsCountersAfter).toBoolean();
+  console.log('usersPostsCountersEqual: ' + usersPostsCountersEqual);
+  const postsEqual = postsFetch!.equals(postsAfter).toBoolean();
+  console.log('postsEqual: ' + postsEqual);
+
+  const isUpdated = allPostsCounterEqual && usersPostsCountersEqual && postsEqual;
+
+  if (isUpdated) {
+    for (const pPost of pendingPosts) {
+      if (pPost.status === 'creating') {
+        await prisma.posts.update({
+          where: {
+            postKey: pPost.postKey
+          },
+          data: {
+            postBlockHeight: blockHeight,
+            status: 'loading'
+          }
+        });
+      } else if (pPost.status === 'deleting') {
+        await prisma.posts.update({
+          where: {
+            postKey: pPost.postKey
+          },
+          data: {
+            deletionBlockHeight: blockHeight,
+            status: 'loading'
+          }
+        });
+      } else if (pPost.status === 'restoring') {
+        await prisma.posts.update({
+          where: {
+            postKey: pPost.postKey
+          },
+          data: {
+            deletionBlockHeight: 0,
+            restorationBlockHeight: blockHeight,
+            status: 'loading'
+          }
+        });
+      }
+    }
+  } else {
+    throw new Error('There is a mismatch between onchain and server state');
+  }
+}
+
+// ============================================================================
+
+async function resetServerPostPublicationsState(pendingPosts: PostsFindMany) {
+  console.log('Current number of posts: ' + postsContext.totalNumberOfPosts);
+  postsContext.totalNumberOfPosts -= pendingPosts.length;
+  console.log('Restored number of posts: ' + postsContext.totalNumberOfPosts);
+
+  const pendingPosters = new Set(pendingPosts.map( post => post.posterAddress));
+  for (const poster of pendingPosters) {
+    const userPosts = await prisma.posts.findMany({
+      where: { posterAddress: poster,
+        postBlockHeight: {
+          not: 0
+        }
+      },
+      select: { userPostsCounter: true }
+    });
+    console.log('Current usersPostsCountersMap root: ' + usersPostsCountersMap.getRoot().toString());
+    usersPostsCountersMap.set(
+      Poseidon.hash(PublicKey.fromBase58(poster).toFields()),
+      Field(userPosts.length)
+    );
+    console.log('Restored usersPostsCountersMap root: ' + usersPostsCountersMap.getRoot().toString());
+  };
+
+  pendingPosts.forEach( pPost => {
+    const posterAddress = PublicKey.fromBase58(pPost.posterAddress);
+    const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
+    const postContentID = CircuitString.fromString(pPost.postContentID);
+    console.log('Current postsMap root: ' + postsMap.getRoot().toString());
+    postsMap.set(
+        Poseidon.hash([posterAddressAsField, postContentID.hash()]),
+        Field(0)
+    );
+    console.log('Restored postsMap root: ' + postsMap.getRoot().toString());
+  });
+}
+
+// ============================================================================
+
+async function resetServerPostUpdatesState(pendingPostUpdates: PostsFindMany) {
+  for (const pendingPostUpdate of pendingPostUpdates) {
+    const posterAddress = PublicKey.fromBase58(pendingPostUpdate!.posterAddress);
+    const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
+    const postContentID = CircuitString.fromString(pendingPostUpdate!.postContentID);
+
+    const restoredPostState = new PostState({
+      posterAddress: posterAddress,
+      postContentID: postContentID,
+      allPostsCounter: Field(pendingPostUpdate!.allPostsCounter),
+      userPostsCounter: Field(pendingPostUpdate!.userPostsCounter),
+      postBlockHeight: Field(pendingPostUpdate!.postBlockHeight),
+      deletionBlockHeight: Field(pendingPostUpdate!.deletionBlockHeight),
+      restorationBlockHeight: Field(pendingPostUpdate!.restorationBlockHeight)
+    });
+
+    console.log('Current postsMap root: ' + postsMap.getRoot().toString());
+    postsMap.set(
+        Poseidon.hash([posterAddressAsField, postContentID.hash()]),
+        restoredPostState.hash()
+    );
+    console.log('Restored postsMap root: ' + postsMap.getRoot().toString());
+  }
+}
+
+// ============================================================================
+
+async function getTransactionStatus(pendingTransaction: Mina.PendingTransaction) {
+  if (pendingTransaction.status === 'pending') {
+    try {
+      await pendingTransaction.wait({ maxAttempts: MAX_ATTEMPTS, interval: INTERVAL });
+      console.log('Transaction successfully included in a block');
+      return 'confirmed';
+    } catch (error: any) {
+      if ( error.message.includes('Exceeded max attempts') ) {
+        return 'pending';
+      } else {
+        console.log(error.message);
+        return 'rejected';
+      }
+    }
+  } else {
+    console.error('Transaction was not accepted for processing by the Mina daemon');
+    return 'rejected';
+  }
 }
 
 // ============================================================================

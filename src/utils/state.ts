@@ -21,28 +21,20 @@ export async function regeneratePostsZkAppState(context: {
         }
       }
     });
-    console.log('posts:');
-    console.log(posts)
     
     const posters = new Set(posts.map( post => post.posterAddress));
-    console.log('posters:');
-    console.log(posters);
-    
     for (const poster of posters) {
-    const userPosts = await context.prisma.posts.findMany({
-      where: { posterAddress: poster,
-        postBlockHeight: {
-        not: 0
+      const userPosts = await context.prisma.posts.findMany({
+        where: { posterAddress: poster,
+          postBlockHeight: {
+          not: 0
+          }
         }
-      }
-    });
-    console.log('Initial usersPostsCountersMap root: ' + context.usersPostsCountersMap.getRoot().toString());
-    context.usersPostsCountersMap.set(
-      Poseidon.hash(PublicKey.fromBase58(poster).toFields()),
-      Field(userPosts.length)
-    );
-    console.log(userPosts.length);
-    console.log('Latest usersPostsCountersMap root: ' + context.usersPostsCountersMap.getRoot().toString());
+      });
+      context.usersPostsCountersMap.set(
+        Poseidon.hash(PublicKey.fromBase58(poster).toFields()),
+        Field(userPosts.length)
+      );
     };
     
     posts.forEach( post => {
@@ -58,16 +50,14 @@ export async function regeneratePostsZkAppState(context: {
         deletionBlockHeight: Field(post.deletionBlockHeight),
         restorationBlockHeight: Field(post.restorationBlockHeight)
       });
-      console.log('Initial postsMap root: ' + context.postsMap.getRoot().toString());
       context.postsMap.set(
         Poseidon.hash([posterAddressAsField, postContentID.hash()]),
         postState.hash()
       );
-      console.log('Latest postsMap root: ' + context.postsMap.getRoot().toString());
     });
     
     context.totalNumberOfPosts = posts.length;
-    console.log('Original number of posts: ' + context.totalNumberOfPosts);
+    console.log('Initial number of posts: ' + context.totalNumberOfPosts);
 
     return posts;
 }
