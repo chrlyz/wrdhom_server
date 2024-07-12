@@ -93,26 +93,6 @@ const repostsContext = {
 
 await regenerateRepostsZkAppState(repostsContext);
 
-const postDeletions = await prisma.postDeletions.findMany({
-  where: {
-    deletionBlockHeight: {
-      gt: 0
-    }
-  }
-});
-let totalNumberOfPostDeletions = postDeletions.length;
-console.log('totalNumberOfPostDeletions: ' + totalNumberOfPostDeletions)
-
-const postRestorations = await prisma.postRestorations.findMany({
-  where: {
-    restorationBlockHeight: {
-      gt: 0
-    }
-  }
-});
-let totalNumberOfPostRestorations = postRestorations.length;
-console.log('totalNumberOfPostRestorations: ' + totalNumberOfPostRestorations);
-
 const commentDeletions = await prisma.commentDeletions.findMany({
   where: {
     deletionBlockHeight: {
@@ -218,29 +198,38 @@ const syncStateTask = new AsyncTask(
         allPostsCounter: 'asc'
       },
       where: {
-        allPostsCounter: {
-          gt: postsContext.totalNumberOfPosts
-        },
-        postBlockHeight: {
-          not: 0
-        }
+        status: 'loading'
       }
     });
+
     for (const pPost of pendingPosts) {
       console.log(pPost);
+      const posterAddress = PublicKey.fromBase58(pPost.posterAddress);
+      const userPostsCounter = Field(pPost.userPostsCounter);
       const postState = new PostState({
-        posterAddress: PublicKey.fromBase58(pPost.posterAddress),
+        posterAddress: posterAddress,
         postContentID: CircuitString.fromString(pPost.postContentID),
         allPostsCounter: Field(pPost.allPostsCounter),
-        userPostsCounter: Field(pPost.userPostsCounter),
+        userPostsCounter: userPostsCounter,
         postBlockHeight: Field(pPost.postBlockHeight),
         deletionBlockHeight: Field(pPost.deletionBlockHeight),
         restorationBlockHeight: Field(pPost.restorationBlockHeight)
       });
 
-      const postKey = Field(pPost.postKey);
-      postsMap.set(postKey, postState.hash());
+      const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
+
+      postsMap.set(Field(pPost.postKey), postState.hash());
+      usersPostsCountersMap.set(posterAddressAsField, userPostsCounter);
       postsContext.totalNumberOfPosts += 1;
+
+      await prisma.posts.update({
+        where: {
+          postKey: pPost.postKey
+        },
+        data: {
+          status: 'loaded'
+        }
+      });
     }
 
     const pendingReactions = await prisma.reactions.findMany({
@@ -374,74 +363,6 @@ const syncStateTask = new AsyncTask(
       targetsRepostsCountersMap.set(Field(target!.postKey), Field(pRepost.targetRepostsCounter));
 
       repostsContext.totalNumberOfReposts += 1;
-    }
-
-    const pendingPostDeletions = await prisma.postDeletions.findMany({
-      where: {
-        allDeletionsCounter: {
-          gt: totalNumberOfPostDeletions,
-        },
-        deletionBlockHeight: {
-          gt: 0
-        }
-      }
-    });
-
-    for (const pPostDeletion of pendingPostDeletions) {
-      const target = await prisma.posts.findUnique({
-        where: {
-          postKey: pPostDeletion.targetKey
-        }
-      });
-
-      console.log(pPostDeletion);
-      const postState = new PostState({
-        posterAddress: PublicKey.fromBase58(target!.posterAddress),
-        postContentID: CircuitString.fromString(target!.postContentID),
-        allPostsCounter: Field(target!.allPostsCounter),
-        userPostsCounter: Field(target!.userPostsCounter),
-        postBlockHeight: Field(target!.postBlockHeight),
-        deletionBlockHeight: Field(target!.deletionBlockHeight),
-        restorationBlockHeight: Field(target!.restorationBlockHeight)
-      });
-
-      const postKey = Field(target!.postKey);
-      postsMap.set(postKey, postState.hash());
-      totalNumberOfPostDeletions += 1;
-    }
-
-    const pendingPostRestorations = await prisma.postRestorations.findMany({
-      where: {
-        allRestorationsCounter: {
-          gt: totalNumberOfPostRestorations
-        },
-        restorationBlockHeight: {
-          gt: 0
-        }
-      }
-    });
-
-    for (const pRestoration of pendingPostRestorations) {
-      const target = await prisma.posts.findUnique({
-        where: {
-          postKey: pRestoration.targetKey
-        }
-      });
-
-      console.log(pRestoration);
-      const postState = new PostState({
-        posterAddress: PublicKey.fromBase58(target!.posterAddress),
-        postContentID: CircuitString.fromString(target!.postContentID),
-        allPostsCounter: Field(target!.allPostsCounter),
-        userPostsCounter: Field(target!.userPostsCounter),
-        postBlockHeight: Field(target!.postBlockHeight),
-        deletionBlockHeight: Field(target!.deletionBlockHeight),
-        restorationBlockHeight: Field(target!.restorationBlockHeight)
-      });
-
-      const postKey = Field(target!.postKey);
-      postsMap.set(postKey, postState.hash());
-      totalNumberOfPostRestorations += 1;
     }
 
     const pendingCommentDeletions = await prisma.commentDeletions.findMany({
@@ -1025,14 +946,8 @@ server.post<{Body: SignedPostDeletion}>('/posts/delete', async (request) => {
     return 'Post is already deleted';
   }
 
-  const pendingDeletion = await prisma.postDeletions.findFirst({
-    where: {
-      targetKey: postKey
-    }
-  });
-  
-  if (pendingDeletion !== null && pendingDeletion?.deletionBlockHeight === 0n) {
-    return 'Post deletion is already pending';
+  if (post !== null && post?.status !== 'loaded') {
+    return `Post is still being confirmed. Status: ${post?.status}`;
   }
 
   const postContentID = CircuitString.fromString(post!.postContentID);
@@ -1056,25 +971,15 @@ server.post<{Body: SignedPostDeletion}>('/posts/delete', async (request) => {
 
   // Check that message to delete post is signed
   if (isSigned) {
-    console.log(postKey);
-    const allDeletionsCounter = (await prisma.postDeletions.count()) + 1;
-    console.log('allPostDeletionsCounter: ' + allDeletionsCounter);
+    console.log('Deleting post with key: ' + postKey);
 
-    const deletionsForTarget = await prisma.postDeletions.findMany({
+    await prisma.posts.update({
       where: {
-        targetKey: postKey
-      }
-    });
-    const targetDeletionsCounter = deletionsForTarget.length + 1;
-    console.log('targetPostDeletionsCounter: ' + targetDeletionsCounter);
-
-    await prisma.postDeletions.create({
+        postKey: postKey
+      },
       data: {
-        targetKey: postKey,
-        allDeletionsCounter: allDeletionsCounter,
-        targetDeletionsCounter: targetDeletionsCounter,
-        deletionBlockHeight: 0,
-        deletionSignature: request.body.signedData.signature
+        status: 'delete',
+        pendingSignature: request.body.signedData.signature
       }
     });
 
@@ -1342,15 +1247,8 @@ server.post<{Body: SignedPostRestoration}>('/posts/restore', async (request) => 
     return 'Post has not been deleted, so it cannot be restored';
   }
 
-  const pendingRestoration = await prisma.postRestorations.findFirst({
-    where: {
-      targetKey: postKey
-    }
-  })
-
-
-  if (pendingRestoration !== null && pendingRestoration?.restorationBlockHeight === 0n) {
-    return 'Post restoration is already pending';
+  if (post !== null && post?.status !== 'loaded') {
+    return `Post is still being confirmed. Status: ${post?.status}`;
   }
 
   const postContentID = CircuitString.fromString(post!.postContentID);
@@ -1374,25 +1272,14 @@ server.post<{Body: SignedPostRestoration}>('/posts/restore', async (request) => 
 
   // Check that message to restore post is signed
   if (isSigned) {
-    console.log(request.body.postKey);
-    const allRestorationsCounter = (await prisma.postRestorations.count()) + 1;
-    console.log('allPostRestorationsCounter: ' + allRestorationsCounter);
-
-    const restorationsForTarget = await prisma.postRestorations.findMany({
+    console.log('Restoring post with key: ' + postKey);
+    await prisma.posts.update({
       where: {
-        targetKey: request.body.postKey
-      }
-    });
-    const targetRestorationsCounter = restorationsForTarget.length + 1;
-    console.log('targetPostRestorationsCounter: ' + targetRestorationsCounter);
-
-    await prisma.postRestorations.create({
+        postKey: postKey
+      },
       data: {
-        targetKey: request.body.postKey,
-        allRestorationsCounter: allRestorationsCounter,
-        targetRestorationsCounter: targetRestorationsCounter,
-        restorationBlockHeight: 0,
-        restorationSignature: request.body.signedData.signature
+        status: 'restore',
+        pendingSignature: request.body.signedData.signature
       }
     });
 
@@ -1420,7 +1307,7 @@ server.post<{Body: SignedCommentRestoration}>('/comments/restore', async (reques
     return 'Comment has not been deleted, so it cannot be restored';
   }
 
-  const pendingRestoration = await prisma.postRestorations.findFirst({
+  const pendingRestoration = await prisma.commentRestorations.findFirst({
     where: {
       targetKey: commentKey
     }
@@ -1574,7 +1461,7 @@ server.post<{Body: SignedReactionRestoration}>('/reactions/restore', async (requ
     return 'Reaction has not been deleted, so it cannot be restored';
   }
 
-  const pendingRestoration = await prisma.postRestorations.findFirst({
+  const pendingRestoration = await prisma.reactionRestorations.findFirst({
     where: {
       targetKey: reactionKey
     }
@@ -1663,11 +1550,11 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
     }
 
     let numberOfDeletedPosts: number;
-    let posts: Posts[];
+    let posts: any[];
 
     if (profileAddress === undefined) {
 
-      numberOfDeletedPosts = (await prisma.posts.findMany({
+      const lastPosts = (await prisma.posts.findMany({
         take: Number(howMany),
         orderBy: {
           allPostsCounter: 'desc'
@@ -1677,11 +1564,11 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
             not: 0,
             gte: fromBlock,
             lte: toBlock
-          }, deletionBlockHeight: {
-            not: 0
           }
         }
-      })).length
+      }));
+
+      numberOfDeletedPosts = lastPosts.filter(post => post.deletionBlockHeight !== 0n).length;
 
       posts = await prisma.posts.findMany({
         take: Number(howMany) + numberOfDeletedPosts,
@@ -1699,7 +1586,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
 
     } else {
 
-      numberOfDeletedPosts = (await prisma.posts.findMany({
+      const lastPosts = (await prisma.posts.findMany({
         take: Number(howMany),
         orderBy: {
           allPostsCounter: 'desc'
@@ -1710,12 +1597,11 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
             not: 0,
             gte: fromBlock,
             lte: toBlock
-          },
-          deletionBlockHeight: {
-            not: 0
           }
         }
-      })).length;
+      }));
+
+      numberOfDeletedPosts = lastPosts.filter(post => post.deletionBlockHeight !== 0n).length;
 
       posts = await prisma.posts.findMany({
         take: Number(howMany) + numberOfDeletedPosts,
@@ -2567,20 +2453,6 @@ type RepostsResponse = {
 
 // ============================================================================
 
-type Posts = {
-  postKey: string;
-  posterAddress: string;
-  postContentID: string;
-  allPostsCounter: bigint;
-  userPostsCounter: bigint;
-  postBlockHeight: bigint;
-  deletionBlockHeight: bigint;
-  restorationBlockHeight: bigint;
-  postSignature: string;
-};
-
-// ============================================================================
-
 type Reposts = {
   repostKey: string,
   isTargetPost: boolean,
@@ -2629,7 +2501,8 @@ const createSQLPost = async (postKey: Field, signature: Signature, posterAddress
       postBlockHeight: 0,
       deletionBlockHeight: 0,
       restorationBlockHeight: 0,
-      postSignature: signature.toBase58()
+      status: 'create',
+      pendingSignature: signature.toBase58()
     }
   });
 }

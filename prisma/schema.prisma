@@ -38,24 +38,8 @@ model comments {
   commentSignature       String
 }
 
-model postDeletions {
-  targetKey              String
-  allDeletionsCounter    BigInt @id
-  targetDeletionsCounter BigInt
-  deletionBlockHeight    BigInt
-  deletionSignature      String
-}
-
-model postRestorations {
-  targetKey                 String
-  allRestorationsCounter    BigInt @id
-  targetRestorationsCounter BigInt
-  restorationBlockHeight    BigInt
-  restorationSignature      String
-}
-
 model posts {
-  postKey                String @id
+  postKey                String       @id
   posterAddress          String
   postContentID          String
   allPostsCounter        BigInt
@@ -63,7 +47,9 @@ model posts {
   postBlockHeight        BigInt
   deletionBlockHeight    BigInt
   restorationBlockHeight BigInt
-  postSignature          String
+  status                 status_enum?
+  pendingBlockHeight     BigInt?
+  pendingSignature       String?
 }
 
 model reactionDeletions {
@@ -125,4 +111,23 @@ model reposts {
   deletionBlockHeight    BigInt
   restorationBlockHeight BigInt
   repostSignature        String
+}
+
+model postRestorations {
+  targetKey                 String
+  allRestorationsCounter    BigInt @id
+  targetRestorationsCounter BigInt
+  restorationBlockHeight    BigInt
+  restorationSignature      String
+}
+
+enum status_enum {
+  create
+  creating
+  delete
+  deleting
+  restore
+  restoring
+  loading
+  loaded
 }
