@@ -113,14 +113,6 @@ model reposts {
   repostSignature        String
 }
 
-model postRestorations {
-  targetKey                 String
-  allRestorationsCounter    BigInt @id
-  targetRestorationsCounter BigInt
-  restorationBlockHeight    BigInt
-  restorationSignature      String
-}
-
 enum status_enum {
   create
   creating
