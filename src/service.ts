@@ -1,5 +1,5 @@
 import fastify from 'fastify';
-import { CircuitString, PublicKey, Signature, Field, MerkleMap, Poseidon, Bool, MerkleMapWitness } from 'o1js';
+import { CircuitString, PublicKey, Signature, Field, MerkleMap, Poseidon, Bool } from 'o1js';
 import cors from '@fastify/cors';
 import { PrismaClient } from '@prisma/client';
 import { createFileEncoderStream, CAREncoderStream } from 'ipfs-car';
@@ -46,7 +46,10 @@ const postsContext = {
   totalNumberOfPosts: totalNumberOfPosts
 }
 
-const posts = await regeneratePostsZkAppState(postsContext);
+await regeneratePostsZkAppState(postsContext);
+
+console.log('usersPostsCountersMap: ' + usersPostsCountersMap.getRoot().toString())
+console.log('postsMap: ' + postsMap.getRoot().toString())
 
 const usersReactionsCountersMap = new MerkleMap();
 const targetsReactionsCountersMap =  new MerkleMap();
@@ -76,7 +79,11 @@ const commentsContext = {
   totalNumberOfComments: totalNumberOfComments
 }
 
-const comments = await regenerateCommentsZkAppState(commentsContext);
+await regenerateCommentsZkAppState(commentsContext);
+
+console.log('usersCommentsCountersMap: ' + usersCommentsCountersMap.getRoot().toString())
+console.log('targetsCommentsCountersMap: ' + targetsCommentsCountersMap.getRoot().toString())
+console.log('commentsMap: ' + commentsMap.getRoot().toString())
 
 const usersRepostsCountersMap = new MerkleMap();
 const targetsRepostsCountersMap =  new MerkleMap();
@@ -92,26 +99,6 @@ const repostsContext = {
 }
 
 await regenerateRepostsZkAppState(repostsContext);
-
-const commentDeletions = await prisma.commentDeletions.findMany({
-  where: {
-    deletionBlockHeight: {
-      gt: 0
-    }
-  }
-});
-let totalNumberOfCommentDeletions = commentDeletions.length;
-console.log('totalNumberOfCommentDeletions: ' + totalNumberOfCommentDeletions);
-
-const commentRestorations = await prisma.commentRestorations.findMany({
-  where: {
-    restorationBlockHeight: {
-      gt: 0
-    }
-  }
-});
-let totalNumberOfCommentRestorations = commentRestorations.length;
-console.log('totalNumberOfCommentRestorations: ' + totalNumberOfCommentRestorations);
 
 const repostDeletions = await prisma.repostDeletions.findMany({
   where: {
@@ -219,8 +206,16 @@ const syncStateTask = new AsyncTask(
       const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
 
       postsMap.set(Field(pPost.postKey), postState.hash());
-      usersPostsCountersMap.set(posterAddressAsField, userPostsCounter);
-      postsContext.totalNumberOfPosts += 1;
+
+      // Only update these values when the post is new
+      if (pPost.allPostsCounter > postsContext.totalNumberOfPosts) {
+        postsContext.totalNumberOfPosts += 1;
+        usersPostsCountersMap.set(posterAddressAsField, userPostsCounter);
+      }
+      
+
+      console.log('usersPostsCountersMap: ' + usersPostsCountersMap.getRoot().toString())
+      console.log('postsMap: ' + postsMap.getRoot().toString())
 
       await prisma.posts.update({
         where: {
@@ -282,12 +277,7 @@ const syncStateTask = new AsyncTask(
         allCommentsCounter: 'asc'
       },
       where: {
-        allCommentsCounter: {
-          gt: commentsContext.totalNumberOfComments
-        },
-        commentBlockHeight: {
-          not: 0
-        }
+        status: 'loading'
       }
     });
     for (const pComment of pendingComments) {
@@ -310,16 +300,26 @@ const syncStateTask = new AsyncTask(
 
       commentsMap.set(Field(pComment.commentKey), commentState.hash());
 
-      const target = await prisma.posts.findUnique({
+      // Only update these values when the comment is new
+      if (pComment.allCommentsCounter > commentsContext.totalNumberOfComments) {
+        commentsContext.totalNumberOfComments += 1;
+        const commenterAddressAsField = Poseidon.hash(commenterAddress.toFields())
+        usersCommentsCountersMap.set(commenterAddressAsField, Field(pComment.userCommentsCounter));
+        targetsCommentsCountersMap.set(Field(pComment.targetKey), Field(pComment.targetCommentsCounter));
+      }
+      
+      console.log('usersCommentsCountersMap: ' + usersCommentsCountersMap.getRoot().toString())
+      console.log('targetsCommentsCountersMap: ' + targetsCommentsCountersMap.getRoot().toString())
+      console.log('commentsMap: ' + commentsMap.getRoot().toString())
+
+      await prisma.comments.update({
         where: {
-          postKey: pComment.targetKey
+          commentKey: pComment.commentKey
+        },
+        data: {
+          status: 'loaded'
         }
       });
-      const targetPosterAddress = Poseidon.hash(PublicKey.fromBase58(target!.posterAddress).toFields())
-      usersCommentsCountersMap.set(targetPosterAddress, Field(pComment.userCommentsCounter));
-      targetsCommentsCountersMap.set(Field(target!.postKey), Field(pComment.targetCommentsCounter));
-
-      commentsContext.totalNumberOfComments += 1;
     }
 
     const pendingReposts = await prisma.reposts.findMany({
@@ -363,80 +363,6 @@ const syncStateTask = new AsyncTask(
       targetsRepostsCountersMap.set(Field(target!.postKey), Field(pRepost.targetRepostsCounter));
 
       repostsContext.totalNumberOfReposts += 1;
-    }
-
-    const pendingCommentDeletions = await prisma.commentDeletions.findMany({
-      where: {
-        allDeletionsCounter: {
-          gt: totalNumberOfCommentDeletions,
-        },
-        deletionBlockHeight: {
-          gt: 0
-        }
-      }
-    });
-
-    for (const pCommentDeletion of pendingCommentDeletions) {
-      const target = await prisma.comments.findUnique({
-        where: {
-          commentKey: pCommentDeletion.targetKey
-        }
-      });
-
-      console.log(pCommentDeletion);
-      const commentState = new CommentState({
-        isTargetPost: Bool(target!.isTargetPost),
-        targetKey: Field(target!.targetKey),
-        commenterAddress: PublicKey.fromBase58(target!.commenterAddress),
-        commentContentID: CircuitString.fromString(target!.commentContentID),
-        allCommentsCounter: Field(target!.allCommentsCounter),
-        userCommentsCounter: Field(target!.userCommentsCounter),
-        targetCommentsCounter: Field(target!.targetCommentsCounter),
-        commentBlockHeight: Field(target!.commentBlockHeight),
-        deletionBlockHeight: Field(target!.deletionBlockHeight),
-        restorationBlockHeight: Field(target!.restorationBlockHeight)
-      });
-
-      const commentKey = Field(target!.commentKey);
-      commentsMap.set(commentKey, commentState.hash());
-      totalNumberOfCommentDeletions += 1;
-    }
-
-    const pendingCommentRestorations = await prisma.commentRestorations.findMany({
-      where: {
-        allRestorationsCounter: {
-          gt: totalNumberOfCommentRestorations,
-        },
-        restorationBlockHeight: {
-          gt: 0
-        }
-      }
-    });
-
-    for (const pCommentRestoration of pendingCommentRestorations) {
-      const target = await prisma.comments.findUnique({
-        where: {
-          commentKey: pCommentRestoration.targetKey
-        }
-      });
-
-      console.log(pCommentRestoration);
-      const commentState = new CommentState({
-        isTargetPost: Bool(target!.isTargetPost),
-        targetKey: Field(target!.targetKey),
-        commenterAddress: PublicKey.fromBase58(target!.commenterAddress),
-        commentContentID: CircuitString.fromString(target!.commentContentID),
-        allCommentsCounter: Field(target!.allCommentsCounter),
-        userCommentsCounter: Field(target!.userCommentsCounter),
-        targetCommentsCounter: Field(target!.targetCommentsCounter),
-        commentBlockHeight: Field(target!.commentBlockHeight),
-        deletionBlockHeight: Field(target!.deletionBlockHeight),
-        restorationBlockHeight: Field(target!.restorationBlockHeight)
-      });
-
-      const commentKey = Field(target!.commentKey);
-      commentsMap.set(commentKey, commentState.hash());
-      totalNumberOfCommentRestorations += 1;
     }
 
     const pendingRepostDeletions = await prisma.repostDeletions.findMany({
@@ -758,7 +684,6 @@ server.post<{Body: SignedData}>('/reactions', async (request) => {
 // ============================================================================
 
 server.post<{Body: SignedComment}>('/comments', async (request) => {
-
   const post = await prisma.posts.findUnique({
     where: {
       postKey: request.body.signedData.data[0],
@@ -934,11 +859,10 @@ server.post<{Body: SignedPostDeletion}>('/posts/delete', async (request) => {
 
   const signature = Signature.fromBase58(request.body.signedData.signature);
   const posterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
-  const postKey = request.body.postKey;
 
   const post = await prisma.posts.findUnique({
     where: {
-      postKey: postKey
+      postKey: request.body.postKey
     }
   });
 
@@ -971,11 +895,11 @@ server.post<{Body: SignedPostDeletion}>('/posts/delete', async (request) => {
 
   // Check that message to delete post is signed
   if (isSigned) {
-    console.log('Deleting post with key: ' + postKey);
+    console.log('Deleting post with key: ' + request.body.postKey);
 
     await prisma.posts.update({
       where: {
-        postKey: postKey
+        postKey: request.body.postKey
       },
       data: {
         status: 'delete',
@@ -996,11 +920,10 @@ server.post<{Body: SignedCommentDeletion}>('/comments/delete', async (request) =
   const signature = Signature.fromBase58(request.body.signedData.signature);
   const commenterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
   const targetKey = request.body.targetKey;
-  const commentKey = request.body.commentKey;
 
   const comment = await prisma.comments.findUnique({
     where: {
-      commentKey: commentKey
+      commentKey: request.body.commentKey
     }
   });
 
@@ -1008,14 +931,8 @@ server.post<{Body: SignedCommentDeletion}>('/comments/delete', async (request) =
     return 'Comment is already deleted';
   }
 
-  const pendingDeletion = await prisma.commentDeletions.findFirst({
-    where: {
-      targetKey: commentKey
-    }
-  })
-  
-  if (pendingDeletion !== null && pendingDeletion?.deletionBlockHeight === 0n) {
-    return 'Comment deletion is already pending';
+  if (comment !== null && comment?.status !== 'loaded') {
+    return `Comment is still being confirmed. Status: ${comment?.status}`;
   }
 
   const commentContentID = CircuitString.fromString(comment!.commentContentID);
@@ -1042,25 +959,15 @@ server.post<{Body: SignedCommentDeletion}>('/comments/delete', async (request) =
 
   // Check that message to delete comment is signed
   if (isSigned) {
-    console.log(commentKey);
-    const allDeletionsCounter = (await prisma.commentDeletions.count()) + 1;
-    console.log('allCommentDeletionsCounter: ' + allDeletionsCounter);
+    console.log('Deleting comment with key: ' + request.body.commentKey);
 
-    const deletionsForTarget = await prisma.commentDeletions.findMany({
+    await prisma.comments.update({
       where: {
-        targetKey: commentKey
-      }
-    });
-    const targetDeletionsCounter = deletionsForTarget.length + 1;
-    console.log('targetCommentDeletionsCounter: ' + targetDeletionsCounter);
-
-    await prisma.commentDeletions.create({
+        commentKey: request.body.commentKey
+      },
       data: {
-        targetKey: commentKey,
-        allDeletionsCounter: allDeletionsCounter,
-        targetDeletionsCounter: targetDeletionsCounter,
-        deletionBlockHeight: 0,
-        deletionSignature: request.body.signedData.signature
+        status: 'delete',
+        pendingSignature: request.body.signedData.signature
       }
     });
 
@@ -1283,7 +1190,7 @@ server.post<{Body: SignedPostRestoration}>('/posts/restore', async (request) => 
       }
     });
 
-    return 'Valid Restoration!';
+    return 'Valid Post Restoration!';
   } else {
     return 'Post restoration message is not signed';
   }
@@ -1295,11 +1202,10 @@ server.post<{Body: SignedCommentRestoration}>('/comments/restore', async (reques
 
   const signature = Signature.fromBase58(request.body.signedData.signature);
   const commenterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
-  const commentKey = request.body.commentKey;
 
   const comment = await prisma.comments.findUnique({
     where: {
-      commentKey: commentKey
+      commentKey: request.body.commentKey
     }
   });
 
@@ -1307,15 +1213,8 @@ server.post<{Body: SignedCommentRestoration}>('/comments/restore', async (reques
     return 'Comment has not been deleted, so it cannot be restored';
   }
 
-  const pendingRestoration = await prisma.commentRestorations.findFirst({
-    where: {
-      targetKey: commentKey
-    }
-  })
-
-  
-  if (pendingRestoration !== null && pendingRestoration?.restorationBlockHeight === 0n) {
-    return 'Comment restoration is already pending';
+  if (comment !== null && comment?.status !== 'loaded') {
+    return `Comment is still being confirmed. Status: ${comment?.status}`;
   }
 
   const commentContentID = CircuitString.fromString(comment!.commentContentID);
@@ -1340,29 +1239,18 @@ server.post<{Body: SignedCommentRestoration}>('/comments/restore', async (reques
 
   // Check that message to restore comment is signed
   if (isSigned) {
-    console.log(request.body.commentKey);
-    const allRestorationsCounter = (await prisma.commentRestorations.count()) + 1;
-    console.log('allCommentsRestorationsCounter: ' + allRestorationsCounter);
-
-    const restorationsForTarget = await prisma.commentRestorations.findMany({
+    console.log('Restoring comment with key: ' + request.body.commentKey);
+    await prisma.comments.update({
       where: {
-        targetKey: request.body.commentKey
-      }
-    });
-    const targetRestorationsCounter = restorationsForTarget.length + 1;
-    console.log('targetCommentsRestorationsCounter: ' + targetRestorationsCounter);
-
-    await prisma.commentRestorations.create({
+        commentKey: request.body.commentKey
+      },
       data: {
-        targetKey: request.body.commentKey,
-        allRestorationsCounter: allRestorationsCounter,
-        targetRestorationsCounter: targetRestorationsCounter,
-        restorationBlockHeight: 0,
-        restorationSignature: request.body.signedData.signature
+        status: 'restore',
+        pendingSignature: request.body.signedData.signature
       }
     });
 
-    return 'Valid Restoration!';
+    return 'Valid Comment Restoration!';
   } else {
     return 'Comment restoration message is not signed';
   }
@@ -1437,7 +1325,7 @@ server.post<{Body: SignedRepostRestoration}>('/reposts/restore', async (request)
       }
     });
 
-    return 'Valid Restoration!';
+    return 'Valid Repost Restoration!';
   } else {
     return 'Repost restoration message is not signed';
   }
@@ -1514,7 +1402,7 @@ server.post<{Body: SignedReactionRestoration}>('/reactions/restore', async (requ
       }
     });
 
-    return 'Valid Restoration!';
+    return 'Valid Reaction Restoration!';
   } else {
     return 'Reaction restoration message is not signed';
   }
@@ -1862,7 +1750,7 @@ server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
       return { commentState: JSON.stringify(commentState)};
     }
 
-    const numberOfDeletedComments = (await prisma.comments.findMany({
+    const lastComments = (await prisma.comments.findMany({
       take: Number(howMany),
       orderBy: {
         targetCommentsCounter: 'desc'
@@ -1878,7 +1766,9 @@ server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
           not: 0
         }
       }
-    })).length;
+    }));
+
+    let numberOfDeletedComments = lastComments.filter(comment => comment.deletionBlockHeight !== 0n).length;
 
     const comments = await prisma.comments.findMany({
       take: Number(howMany) + numberOfDeletedComments,
@@ -2536,7 +2426,7 @@ const createSQLReaction = async (reactionKey: Field, targetKey: Field, reactorAd
 
 const createSQLComment = async (commentKey: Field, targetKey: Field, commenterAddress: string,
   commentCID: any, allCommentsCounter: number,
-  userCommentsCounter: number, targetCommentsCounter:number,
+  userCommentsCounter: number, targetCommentsCounter: number,
   signature: string) => {
 
   await prisma.comments.create({
@@ -2552,7 +2442,8 @@ const createSQLComment = async (commentKey: Field, targetKey: Field, commenterAd
       commentBlockHeight: 0,
       deletionBlockHeight: 0,
       restorationBlockHeight: 0,
-      commentSignature: signature
+      status: 'create',
+      pendingSignature: signature
     }
   });
 }

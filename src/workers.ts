@@ -29,7 +29,7 @@ console.log(`${(endTime - startTime)/1000/60} minutes`);
 
 // ============================================================================
 
-const worker = new Worker('postsQueue', async job => {
+new Worker('postsQueue', async job => {
 
     const transition = PostsTransition.fromJSON(JSON.parse(job.data.provePostInput.transition));
     const signature = Signature.fromBase58(job.data.provePostInput.signature);
@@ -62,7 +62,7 @@ const worker = new Worker('postsQueue', async job => {
 
 // ============================================================================
 
-  const mergingWorker = new Worker('mergingPostsQueue', async job => {
+new Worker('mergingPostsQueue', async job => {
 
     const mergedTransition = PostsTransition.fromJSON(JSON.parse(job.data.mergedTransition));
     const proof1 = await PostsProof.fromJSON(JSON.parse(job.data.proof1));
@@ -76,7 +76,7 @@ const worker = new Worker('postsQueue', async job => {
 
 // ============================================================================
 
-const postDeletionsWorker = new Worker('postDeletionsQueue', async job => {
+new Worker('postDeletionsQueue', async job => {
 
   const transition = PostsTransition.fromJSON(JSON.parse(job.data.provePostDeletionInputs.transition));
   const signature = Signature.fromBase58(job.data.provePostDeletionInputs.signature);
@@ -107,7 +107,7 @@ const postDeletionsWorker = new Worker('postDeletionsQueue', async job => {
 
 // ============================================================================
 
-const postRestorationsWorker = new Worker('postRestorationsQueue', async job => {
+new Worker('postRestorationsQueue', async job => {
 
   const transition = PostsTransition.fromJSON(JSON.parse(job.data.provePostRestorationInputs.transition));
   const signature = Signature.fromBase58(job.data.provePostRestorationInputs.signature);
@@ -138,7 +138,7 @@ const postRestorationsWorker = new Worker('postRestorationsQueue', async job => 
 
 // ============================================================================
 
-const reactionsWorker = new Worker('reactionsQueue', async job => {
+new Worker('reactionsQueue', async job => {
 
   const transition = ReactionsTransition.fromJSON(JSON.parse(job.data.proveReactionInput.transition));
   const signature = Signature.fromBase58(job.data.proveReactionInput.signature);
@@ -184,7 +184,7 @@ const reactionsWorker = new Worker('reactionsQueue', async job => {
 
 // ============================================================================
 
-const mergingReactionsWorker = new Worker('mergingReactionsQueue', async job => {
+new Worker('mergingReactionsQueue', async job => {
 
   const mergedTransition = ReactionsTransition.fromJSON(JSON.parse(job.data.mergedTransition));
   const proof1 = await ReactionsProof.fromJSON(JSON.parse(job.data.proof1));
@@ -198,7 +198,7 @@ const mergingReactionsWorker = new Worker('mergingReactionsQueue', async job => 
 
 // ============================================================================
 
-const reactionDeletionsWorker = new Worker('reactionDeletionsQueue', async job => {
+new Worker('reactionDeletionsQueue', async job => {
 
   const transition = ReactionsTransition.fromJSON(JSON.parse(job.data.proveReactionDeletionInput.transition));
   const signature = Signature.fromBase58(job.data.proveReactionDeletionInput.signature);
@@ -237,7 +237,7 @@ const reactionDeletionsWorker = new Worker('reactionDeletionsQueue', async job =
 
 // ============================================================================
 
-const reactionRestorationsWorker = new Worker('reactionRestorationsQueue', async job => {
+new Worker('reactionRestorationsQueue', async job => {
 
   const transition = ReactionsTransition.fromJSON(JSON.parse(job.data.proveReactionRestorationInput.transition));
   const signature = Signature.fromBase58(job.data.proveReactionRestorationInput.signature);
@@ -276,23 +276,23 @@ const reactionRestorationsWorker = new Worker('reactionRestorationsQueue', async
 
 // ============================================================================
 
-const commentsQueueWorker = new Worker('commentsQueue', async job => {
+new Worker('commentsQueue', async job => {
 
-  const transition = CommentsTransition.fromJSON(JSON.parse(job.data.proveCommentInput.transition));
-  const signature = Signature.fromBase58(job.data.proveCommentInput.signature);
-  const targets = Field(job.data.proveCommentInput.targets);
-  const postState = PostState.fromJSON(JSON.parse(job.data.proveCommentInput.postState)) as PostState;
-  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentInput.targetWitness));
-  const commentState = CommentState.fromJSON(JSON.parse(job.data.proveCommentInput.commentState)) as CommentState;
-  const initialUsersCommentsCounters = Field(job.data.proveCommentInput.initialUsersCommentsCounters);
-  const latestUsersCommentsCounters = Field(job.data.proveCommentInput.latestUsersCommentsCounters);
-  const userCommentsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentInput.userCommentsCounterWitness));
-  const initialTargetsCommentsCounters = Field(job.data.proveCommentInput.initialTargetsCommentsCounters);
-  const latestTargetsCommentsCounters = Field(job.data.proveCommentInput.latestTargetsCommentsCounters);
-  const targetCommentsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentInput.targetCommentsCounterWitness));
-  const initialComments = Field(job.data.proveCommentInput.initialComments);
-  const latestComments = Field(job.data.proveCommentInput.latestComments);
-  const commentWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentInput.commentWitness));
+  const transition = CommentsTransition.fromJSON(JSON.parse(job.data.proveCommentInputs.transition));
+  const signature = Signature.fromBase58(job.data.proveCommentInputs.signature);
+  const targets = Field(job.data.proveCommentInputs.targets);
+  const postState = PostState.fromJSON(JSON.parse(job.data.proveCommentInputs.postState)) as PostState;
+  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentInputs.targetWitness));
+  const commentState = CommentState.fromJSON(JSON.parse(job.data.proveCommentInputs.commentState)) as CommentState;
+  const initialUsersCommentsCounters = Field(job.data.proveCommentInputs.initialUsersCommentsCounters);
+  const latestUsersCommentsCounters = Field(job.data.proveCommentInputs.latestUsersCommentsCounters);
+  const userCommentsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentInputs.userCommentsCounterWitness));
+  const initialTargetsCommentsCounters = Field(job.data.proveCommentInputs.initialTargetsCommentsCounters);
+  const latestTargetsCommentsCounters = Field(job.data.proveCommentInputs.latestTargetsCommentsCounters);
+  const targetCommentsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentInputs.targetCommentsCounterWitness));
+  const initialComments = Field(job.data.proveCommentInputs.initialComments);
+  const latestComments = Field(job.data.proveCommentInputs.latestComments);
+  const commentWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentInputs.commentWitness));
 
   
   const proof = await Comments.proveCommentPublishingTransition(
@@ -323,7 +323,7 @@ const commentsQueueWorker = new Worker('commentsQueue', async job => {
 
 // ============================================================================
 
-const mergingCommentsWorker = new Worker('mergingCommentsQueue', async job => {
+new Worker('mergingCommentsQueue', async job => {
 
   const mergedTransition = CommentsTransition.fromJSON(JSON.parse(job.data.mergedTransition));
   const proof1 = await CommentsProof.fromJSON(JSON.parse(job.data.proof1));
@@ -337,21 +337,21 @@ const mergingCommentsWorker = new Worker('mergingCommentsQueue', async job => {
 
 // ============================================================================
 
-const commentDeletionsWorker = new Worker('commentDeletionsQueue', async job => {
+new Worker('commentDeletionsQueue', async job => {
 
-  const transition = CommentsTransition.fromJSON(JSON.parse(job.data.proveCommentDeletionInput.transition));
-  const signature = Signature.fromBase58(job.data.proveCommentDeletionInput.signature);
-  const targets = Field(job.data.proveCommentDeletionInput.targets);
-  const postState = PostState.fromJSON(JSON.parse(job.data.proveCommentDeletionInput.postState)) as PostState;
-  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentDeletionInput.targetWitness));
-  const currentAllCommentsCounter = Field(job.data.proveCommentDeletionInput.currentAllCommentsCounter);
-  const initialCommentState = CommentState.fromJSON(JSON.parse(job.data.proveCommentDeletionInput.initialCommentState)) as CommentState;
-  const usersCommentsCounters = Field(job.data.proveCommentDeletionInput.usersCommentsCounters);
-  const targetsCommentsCounters = Field(job.data.proveCommentDeletionInput.targetsCommentsCounters);
-  const initialComments = Field(job.data.proveCommentDeletionInput.initialComments);
-  const latestComments = Field(job.data.proveCommentDeletionInput.latestComments);
-  const commentWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentDeletionInput.commentWitness));
-  const deletionBlockHeight = Field(job.data.proveCommentDeletionInput.deletionBlockHeight);
+  const transition = CommentsTransition.fromJSON(JSON.parse(job.data.proveCommentDeletionInputs.transition));
+  const signature = Signature.fromBase58(job.data.proveCommentDeletionInputs.signature);
+  const targets = Field(job.data.proveCommentDeletionInputs.targets);
+  const postState = PostState.fromJSON(JSON.parse(job.data.proveCommentDeletionInputs.postState)) as PostState;
+  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentDeletionInputs.targetWitness));
+  const currentAllCommentsCounter = Field(job.data.proveCommentDeletionInputs.currentAllCommentsCounter);
+  const initialCommentState = CommentState.fromJSON(JSON.parse(job.data.proveCommentDeletionInputs.initialCommentState)) as CommentState;
+  const usersCommentsCounters = Field(job.data.proveCommentDeletionInputs.usersCommentsCounters);
+  const targetsCommentsCounters = Field(job.data.proveCommentDeletionInputs.targetsCommentsCounters);
+  const initialComments = Field(job.data.proveCommentDeletionInputs.initialComments);
+  const latestComments = Field(job.data.proveCommentDeletionInputs.latestComments);
+  const commentWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentDeletionInputs.commentWitness));
+  const deletionBlockHeight = Field(job.data.proveCommentDeletionInputs.blockHeight);
   
   const proof = await Comments.proveCommentDeletionTransition(
     transition,
@@ -376,21 +376,21 @@ const commentDeletionsWorker = new Worker('commentDeletionsQueue', async job => 
 
 // ============================================================================
 
-const commentRestorationsWorker = new Worker('commentRestorationsQueue', async job => {
+new Worker('commentRestorationsQueue', async job => {
 
-  const transition = CommentsTransition.fromJSON(JSON.parse(job.data.proveCommentRestorationInput.transition));
-  const signature = Signature.fromBase58(job.data.proveCommentRestorationInput.signature);
-  const targets = Field(job.data.proveCommentRestorationInput.targets);
-  const postState = PostState.fromJSON(JSON.parse(job.data.proveCommentRestorationInput.postState)) as PostState;
-  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentRestorationInput.targetWitness));
-  const currentAllCommentsCounter = Field(job.data.proveCommentRestorationInput.currentAllCommentsCounter);
-  const initialCommentState = CommentState.fromJSON(JSON.parse(job.data.proveCommentRestorationInput.initialCommentState)) as CommentState;
-  const usersCommentsCounters = Field(job.data.proveCommentRestorationInput.usersCommentsCounters);
-  const targetsCommentsCounters = Field(job.data.proveCommentRestorationInput.targetsCommentsCounters);
-  const initialComments = Field(job.data.proveCommentRestorationInput.initialComments);
-  const latestComments = Field(job.data.proveCommentRestorationInput.latestComments);
-  const commentWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentRestorationInput.commentWitness));
-  const restorationBlockHeight = Field(job.data.proveCommentRestorationInput.restorationBlockHeight);
+  const transition = CommentsTransition.fromJSON(JSON.parse(job.data.proveCommentRestorationInputs.transition));
+  const signature = Signature.fromBase58(job.data.proveCommentRestorationInputs.signature);
+  const targets = Field(job.data.proveCommentRestorationInputs.targets);
+  const postState = PostState.fromJSON(JSON.parse(job.data.proveCommentRestorationInputs.postState)) as PostState;
+  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentRestorationInputs.targetWitness));
+  const currentAllCommentsCounter = Field(job.data.proveCommentRestorationInputs.currentAllCommentsCounter);
+  const initialCommentState = CommentState.fromJSON(JSON.parse(job.data.proveCommentRestorationInputs.initialCommentState)) as CommentState;
+  const usersCommentsCounters = Field(job.data.proveCommentRestorationInputs.usersCommentsCounters);
+  const targetsCommentsCounters = Field(job.data.proveCommentRestorationInputs.targetsCommentsCounters);
+  const initialComments = Field(job.data.proveCommentRestorationInputs.initialComments);
+  const latestComments = Field(job.data.proveCommentRestorationInputs.latestComments);
+  const commentWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentRestorationInputs.commentWitness));
+  const restorationBlockHeight = Field(job.data.proveCommentRestorationInputs.blockHeight);
   
   const proof = await Comments.proveCommentRestorationTransition(
     transition,
@@ -415,7 +415,7 @@ const commentRestorationsWorker = new Worker('commentRestorationsQueue', async j
 
 // ============================================================================
 
-const repostsQueueWorker = new Worker('repostsQueue', async job => {
+new Worker('repostsQueue', async job => {
 
   const transition = RepostsTransition.fromJSON(JSON.parse(job.data.proveRepostInput.transition));
   const signature = Signature.fromBase58(job.data.proveRepostInput.signature);
@@ -462,7 +462,7 @@ const repostsQueueWorker = new Worker('repostsQueue', async job => {
 
 // ============================================================================
 
-const mergingRepostsWorker = new Worker('mergingRepostsQueue', async job => {
+new Worker('mergingRepostsQueue', async job => {
 
   const mergedTransition = RepostsTransition.fromJSON(JSON.parse(job.data.mergedTransition));
   const proof1 = await RepostsProof.fromJSON(JSON.parse(job.data.proof1));
@@ -476,7 +476,7 @@ const mergingRepostsWorker = new Worker('mergingRepostsQueue', async job => {
 
 // ============================================================================
 
-const repostDeletionsWorker = new Worker('repostDeletionsQueue', async job => {
+new Worker('repostDeletionsQueue', async job => {
 
   const transition = RepostsTransition.fromJSON(JSON.parse(job.data.proveRepostDeletionInput.transition));
   const signature = Signature.fromBase58(job.data.proveRepostDeletionInput.signature);
@@ -515,7 +515,7 @@ const repostDeletionsWorker = new Worker('repostDeletionsQueue', async job => {
 
 // ============================================================================
 
-const repostRestorationsWorker = new Worker('repostRestorationsQueue', async job => {
+new Worker('repostRestorationsQueue', async job => {
 
   const transition = RepostsTransition.fromJSON(JSON.parse(job.data.proveRepostRestorationInput.transition));
   const signature = Signature.fromBase58(job.data.proveRepostRestorationInput.signature);
