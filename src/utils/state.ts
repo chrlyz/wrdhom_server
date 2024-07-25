@@ -57,7 +57,6 @@ export async function regeneratePostsZkAppState(context: {
     });
     
     context.totalNumberOfPosts = posts.length;
-    console.log('Initial number of posts: ' + context.totalNumberOfPosts);
 
     return posts;
 }
@@ -181,12 +180,8 @@ export async function regenerateCommentsZkAppState(context: {
       }
     }
   });
-  console.log('comments:');
-  console.log(comments)
   
   const commenters = new Set(comments.map( comment => comment.commenterAddress));
-  console.log('commenters:');
-  console.log(commenters);
   
   for (const commenter of commenters) {
     const userComments = await context.prisma.comments.findMany({
@@ -197,18 +192,13 @@ export async function regenerateCommentsZkAppState(context: {
         }
       }
     });
-    console.log('Initial usersCommentsCountersMap root: ' + context.usersCommentsCountersMap.getRoot().toString());
     context.usersCommentsCountersMap.set(
       Poseidon.hash(PublicKey.fromBase58(commenter).toFields()),
       Field(userComments.length)
     );
-    console.log(userComments.length);
-    console.log('Latest usersCommentsCountersMap root: ' + context.usersCommentsCountersMap.getRoot().toString());
   };
 
   const targets = new Set(comments.map( comment => comment.targetKey));
-  console.log('targets');
-  console.log(targets);
 
   for (const target of targets) {
     const targetComments = await context.prisma.comments.findMany({
@@ -218,14 +208,11 @@ export async function regenerateCommentsZkAppState(context: {
           not: 0
         }
       }
-    })
-    console.log('Initial targetsCommentsCountersMap root: ' + context.targetsCommentsCountersMap.getRoot().toString());
+    });
     context.targetsCommentsCountersMap.set(
       Field(target),
       Field(targetComments.length)
     );
-    console.log(targetComments.length);
-    console.log('Latest targetsCommentsCountersMap root: ' + context.targetsCommentsCountersMap.getRoot().toString());
   }
   
   comments.forEach( comment => {
@@ -247,16 +234,13 @@ export async function regenerateCommentsZkAppState(context: {
       deletionBlockHeight: Field(comment.deletionBlockHeight),
       restorationBlockHeight: Field(comment.restorationBlockHeight)
     });
-    console.log('Initial commentsMap root: ' + context.commentsMap.getRoot().toString());
     context.commentsMap.set(
       Poseidon.hash([targetKey, commenterAddressAsField, commentContentIDAsField]),
       commentState.hash()
     );
-    console.log('Latest commentsMap root: ' + context.commentsMap.getRoot().toString());
   });
   
   context.totalNumberOfComments = comments.length;
-  console.log('Original number of comments: ' + context.totalNumberOfComments);
 
   return comments;
 }

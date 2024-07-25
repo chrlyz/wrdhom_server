@@ -193,6 +193,13 @@ const repostsContext = {
 
 await regenerateRepostsZkAppState(repostsContext);
 
+class OnchainAndServerStateMismatchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OnchainAndServerStateMismatchError';
+  }
+}
+
 const provingPosts = 0;
 const provingReactions = 1;
 const provingComments = 2;
@@ -262,14 +269,14 @@ while (true) {
         console.log('Syncing onchain and server state since last post publications:');
         await assertPostsOnchainAndServerState(pendingPosts, pendingPosts[0].pendingBlockHeight!);
         continue;
-      } catch (error: any) {
+      } catch (error) {
           /* If a pending transaction hasn't been successfully confirmed,
             reset server state to process the pending actions with a new blockheight
           */
-         if (error.message.includes('There is a mismatch between onchain and server state')) {
+         if (error instanceof OnchainAndServerStateMismatchError) {
           await resetServerPostPublicationsState(pendingPosts);
          } else {
-          console.log(error.message);
+          throw error;
          }
       }
     }
@@ -549,44 +556,34 @@ while (true) {
       }
   } else if (provingTurn === provingComments) {
 
-    const pendingComments = await prisma.comments.findMany({
+    let pendingComments: CommentsFindMany;
+    let proveCommentsInputs: ProveCommentInputs[] = [];
+
+    // Get actions that may have a pending associated transaction
+    pendingComments = await prisma.comments.findMany({
       take: Number(process.env.PARALLEL_NUMBER),
       orderBy: {
           allCommentsCounter: 'asc'
       },
       where: {
-          commentBlockHeight: 0
+          status: 'creating'
       }
-      });
-      commentsContext.totalNumberOfComments += pendingComments.length;
-      console.log('Number of comments if update is successful: ' + commentsContext.totalNumberOfComments);
-      console.log('pendingComments:');
-      console.log(pendingComments);
-    
-      startTime = performance.now();
-    
-      const lastBlock = await fetchLastBlock(configComments.url);
-      const commentBlockHeight = lastBlock.blockchainLength.toBigint();
-      console.log(commentBlockHeight);
+    });
 
-      const proveCommentInputs: {
-        transition: string,
-        signature: string,
-        targets: string,
-        postState: string,
-        targetWitness: string,
-        commentState: string,
-        initialUsersCommentsCounters: string,
-        latestUsersCommentsCounters: string,
-        userCommentsCounterWitness: string,
-        initialTargetsCommentsCounters: string,
-        latestTargetsCommentsCounters: string,
-        targetCommentsCounterWitness: string,
-        initialComments: string,
-        latestComments: string,
-        commentWitness: string
-      }[] = []
-    
+    // If there isn't a pending transaction, process new actions
+    if (pendingComments.length === 0) {
+      pendingComments = await prisma.comments.findMany({
+        take: Number(process.env.PARALLEL_NUMBER),
+        orderBy: {
+            allCommentsCounter: 'asc'
+        },
+        where: {
+            status: 'create'
+        }
+      });
+      // Handle possible pending transaction confirmation or failure
+    } else {
+      commentsContext.totalNumberOfComments += pendingComments.length;
       for (const pComment of pendingComments) {
         const result = await generateProveCommentInputs(
           pComment.isTargetPost,
@@ -596,151 +593,114 @@ while (true) {
           pComment.allCommentsCounter,
           pComment.userCommentsCounter,
           pComment.targetCommentsCounter,
-          commentBlockHeight,
+          pComment.pendingBlockHeight!,
           pComment.deletionBlockHeight,
           pComment.restorationBlockHeight,
-          pComment.commentSignature
+          pComment.pendingSignature!
         );
-    
-        proveCommentInputs.push(result);
+        proveCommentsInputs.push(result);
+      }
+      
+      try {
+        /* If a pending transaction was confirmed, syncing onchain and server state,
+          restart loop to process new actions
+        */
+        console.log('Syncing onchain and server state since last comment publications:');
+        await assertCommentsOnchainAndServerState(pendingComments, pendingComments[0].pendingBlockHeight!);
+        continue;
+      } catch (error) {
+          /* If a pending transaction hasn't been successfully confirmed,
+            reset server state to process the pending actions with a new blockheight
+          */
+         if (error instanceof OnchainAndServerStateMismatchError) {
+          await resetServerCommentPublicationsState(pendingComments);
+         } else {
+          throw error;
+         }
+      }
+    }
+
+    if (pendingComments.length !== 0) {
+      commentsContext.totalNumberOfComments += pendingComments.length;
+      const lastBlock = await fetchLastBlock(configComments.url);
+      const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      console.log('Current blockheight for comment publications: ' + currentBlockHeight);
+      proveCommentsInputs.length = 0;
+      for (const pComment of pendingComments) {
+        const result = await generateProveCommentInputs(
+          pComment.isTargetPost,
+          pComment.targetKey,
+          pComment.commenterAddress,
+          pComment.commentContentID,
+          pComment.allCommentsCounter,
+          pComment.userCommentsCounter,
+          pComment.targetCommentsCounter,
+          currentBlockHeight,
+          pComment.deletionBlockHeight,
+          pComment.restorationBlockHeight,
+          pComment.pendingSignature!
+        );
+        proveCommentsInputs.push(result);
+        pComment.status = 'creating';
+        await prisma.comments.update({
+          where: {
+            commentKey: pComment.commentKey
+          },
+          data: {
+            status: 'creating',
+            pendingBlockHeight: currentBlockHeight
+          }
+        });
       }
 
       const jobsPromises: Promise<any>[] = [];
-
-      for (const proveCommentInput of proveCommentInputs) {
+      for (const proveCommentInputs of proveCommentsInputs) {
         const job = await commentsQueue.add(
           `job`,
-          { proveCommentInput: proveCommentInput }
+          { proveCommentInputs: proveCommentInputs }
         );
         jobsPromises.push(job.waitUntilFinished(commentsQueueEvents));
       }
-  
+
+      startTime = performance.now();
       const transitionsAndProofsAsStrings: {
         transition: string;
         proof: string;
       }[] = await Promise.all(jobsPromises);
-    
       const transitionsAndProofs: {
         transition: CommentsTransition,
         proof: CommentsProof
       }[] = [];
-
       for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: CommentsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
           proof: await CommentsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
       }
-  
       endTime = performance.now();
-      console.log(`${(endTime - startTime)/1000/60} minutes`);
+      console.log(`Created ${pendingComments.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
     
-      if (transitionsAndProofs.length !== 0) {
-        startTime = performance.now();
-        await updateCommentsOnChainState(transitionsAndProofs);
-        endTime = performance.now();
-        console.log(`${(endTime - startTime)/1000/60} minutes`);
-    
-        let tries = 0;
-        let allCommentsCounterFetch;
-        let userCommentsCounterFetch;
-        let targetCommentsCounterFetch;
-        let commentsFetch;
-        while (tries < MAX_ATTEMPTS) {
-          console.log('Pause to wait for the transaction to confirm...');
-          await delay(20000);
-    
-          allCommentsCounterFetch = await commentsContract.allCommentsCounter.fetch();
-          console.log('allCommentsCounterFetch: ' + allCommentsCounterFetch?.toString());
-          userCommentsCounterFetch = await commentsContract.usersCommentsCounters.fetch();
-          console.log('userCommentsCounterFetch: ' + userCommentsCounterFetch?.toString());
-          targetCommentsCounterFetch = await commentsContract.targetsCommentsCounters.fetch();
-          console.log('targetCommentsCounterFetch: ' + targetCommentsCounterFetch?.toString());
-          commentsFetch = await commentsContract.comments.fetch();
-          console.log('commentsFetch: ' + commentsFetch?.toString());
-    
-          console.log(Field(commentsContext.totalNumberOfComments).toString());
-          console.log(usersCommentsCountersMap.getRoot().toString());
-          console.log(targetsCommentsCountersMap.getRoot().toString());
-          console.log(commentsMap.getRoot().toString());
-    
-          console.log(allCommentsCounterFetch?.equals(Field(commentsContext.totalNumberOfComments)).toBoolean());
-          console.log(userCommentsCounterFetch?.equals(usersCommentsCountersMap.getRoot()).toBoolean());
-          console.log(targetCommentsCounterFetch?.equals(targetsCommentsCountersMap.getRoot()).toBoolean());
-          console.log(commentsFetch?.equals(commentsMap.getRoot()).toBoolean());
-    
-          if (allCommentsCounterFetch?.equals(Field(commentsContext.totalNumberOfComments)).toBoolean()
-          && userCommentsCounterFetch?.equals(usersCommentsCountersMap.getRoot()).toBoolean()
-          && targetCommentsCounterFetch?.equals(targetsCommentsCountersMap.getRoot()).toBoolean()
-          && commentsFetch?.equals(commentsMap.getRoot()).toBoolean()) {
-            for (const pComment of pendingComments) {
-              await prisma.comments.update({
-                  where: {
-                    commentKey: pComment.commentKey
-                  },
-                  data: {
-                    commentBlockHeight: commentBlockHeight
-                  }
-              });
-            }
-            tries = MAX_ATTEMPTS;
-          }
-          // Reset initial state if transaction appears to have failed
-          if (tries === MAX_ATTEMPTS - 1) {
-            commentsContext.totalNumberOfComments -= pendingComments.length;
-            console.log('Original number of comments: ' + commentsContext.totalNumberOfComments);
-    
-            const pendingCommenters = new Set(pendingComments.map( comment => comment.commenterAddress));
-            for (const commenter of pendingCommenters) {
-              const userComments = await prisma.comments.findMany({
-                where: {
-                  commenterAddress: commenter,
-                  commentBlockHeight: {
-                    not: 0
-                  }
-                }
-              });
-              console.log(userComments);
-              console.log('Initial usersCommentsCountersMap root: ' + usersCommentsCountersMap.getRoot().toString());
-              usersCommentsCountersMap.set(
-                Poseidon.hash(PublicKey.fromBase58(commenter).toFields()),
-                Field(userComments.length)
-              );
-              console.log(userComments.length);
-              console.log('Latest usersCommentsCountersMap root: ' + usersCommentsCountersMap.getRoot().toString());
-            };
+      startTime = performance.now();
+      const pendingTransaction = await updateCommentsOnChainState(transitionsAndProofs);
+      endTime = performance.now();
+      console.log(`Merged ${pendingComments.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
 
-            const pendingTargets = new Set(pendingComments.map( comment => comment.targetKey));
-            for (const target of pendingTargets) {
-              const targetComments = await prisma.comments.findMany({
-                where: {
-                  targetKey: target,
-                  commentBlockHeight: {
-                    not: 0
-                  }
-                }
-              })
-              console.log('Initial targetsCommentsCountersMap root: ' + targetsCommentsCountersMap.getRoot().toString());
-              targetsCommentsCountersMap.set(
-                Field(target),
-                Field(targetComments.length)
-              );
-              console.log(targetComments.length);
-              console.log('Latest targetsCommentsCountersMap root: ' + targetsCommentsCountersMap.getRoot().toString());
-            }
-
-            pendingComments.forEach( pComment => {
-              console.log('Initial commentsMap root: ' + commentsMap.getRoot().toString());
-              commentsMap.set(
-                  Field(pComment.commentKey),
-                  Field(0)
-              );
-              console.log('Latest commentsMap root: ' + commentsMap.getRoot().toString());
-            });
-          }
-          tries++;
-        }
+      startTime = performance.now();
+      console.log('Confirming comment publications transaction...');
+      let status = 'pending';
+      while (status === 'pending') {
+        status = await getTransactionStatus(pendingTransaction);
       }
+      endTime = performance.now();
+      console.log(`Waited ${(endTime - startTime)/1000/60} minutes for transaction confirmation or rejection`);
+
+      if (status === 'rejected') {
+        await resetServerCommentPublicationsState(pendingComments);
+        continue;
+      }
+
+      await assertCommentsOnchainAndServerState(pendingComments, currentBlockHeight);
+    }
 
   } else if (provingTurn === provingReposts) {
 
@@ -987,14 +947,14 @@ while (true) {
          console.log('Syncing onchain and server state since last post deletions:');
          await assertPostsOnchainAndServerState(pendingPostDeletions, pendingPostDeletions[0].pendingBlockHeight!);
          continue;
-       } catch (error: any) {
+       } catch (error) {
            /* If a pending transaction hasn't been successfully confirmed,
              reset server state to process the pending actions with a new blockheight
            */
-          if (error.message.includes('There is a mismatch between onchain and server state')) {
-           await resetServerPostUpdatesState(pendingPostDeletions);
+          if (error instanceof OnchainAndServerStateMismatchError) {
+           resetServerPostUpdatesState(pendingPostDeletions);
           } else {
-           console.log(error.message);
+           throw error;
           }
        }
      }
@@ -1072,7 +1032,7 @@ while (true) {
        console.log(`Waited ${(endTime - startTime)/1000/60} minutes for transaction confirmation or rejection`);
  
        if (status === 'rejected') {
-         await resetServerPostUpdatesState(pendingPostDeletions);
+         resetServerPostUpdatesState(pendingPostDeletions);
          continue;
        }
  
@@ -1133,14 +1093,14 @@ while (true) {
         console.log('Syncing onchain and server state since last post restorations:');
         await assertPostsOnchainAndServerState(pendingPostRestorations, pendingPostRestorations[0].pendingBlockHeight!);
         continue;
-      } catch (error: any) {
+      } catch (error) {
           /* If a pending transaction hasn't been successfully confirmed,
             reset server state to process the pending actions with a new blockheight
           */
-         if (error.message.includes('There is a mismatch between onchain and server state')) {
-          await resetServerPostUpdatesState(pendingPostRestorations);
+         if (error instanceof OnchainAndServerStateMismatchError) {
+          resetServerPostUpdatesState(pendingPostRestorations);
          } else {
-          console.log(error.message);
+          throw error;
          }
       }
     }
@@ -1219,7 +1179,7 @@ while (true) {
       console.log(`Waited ${(endTime - startTime)/1000/60} minutes for transaction confirmation or rejection`);
 
       if (status === 'rejected') {
-        await resetServerPostUpdatesState(pendingPostRestorations);
+        resetServerPostUpdatesState(pendingPostRestorations);
         continue;
       }
 
@@ -1228,406 +1188,334 @@ while (true) {
 
   } else if (provingTurn === provingCommentDeletions) {
 
-    const pendingCommentDeletions = await prisma.commentDeletions.findMany({
+    let pendingCommentDeletions: CommentsFindMany;
+    let proveCommentDeletionsInputs: ProveCommentsUpdateInputs[] = [];
+
+    // Get actions that may have a pending associated transaction
+    pendingCommentDeletions = await prisma.comments.findMany({
       take: Number(process.env.PARALLEL_NUMBER),
       orderBy: {
-          allDeletionsCounter: 'asc'
+          allCommentsCounter: 'asc'
       },
       where: {
-          deletionBlockHeight: 0
+          status: 'deleting'
       }
+    });
+
+    // If there isn't a pending transaction, process new actions
+    if (pendingCommentDeletions.length === 0) {
+      pendingCommentDeletions = await prisma.comments.findMany({
+        take: Number(process.env.PARALLEL_NUMBER),
+        orderBy: {
+            allCommentsCounter: 'asc'
+        },
+        where: {
+            status: 'delete'
+        }
       });
-      console.log('pendingCommentDeletions:');
-      console.log(pendingCommentDeletions);
-    
-      startTime = performance.now();
-    
-      const lastBlock = await fetchLastBlock(configComments.url);
-      const deletionBlockHeight = lastBlock.blockchainLength.toBigint();
-      console.log(deletionBlockHeight);
-
-      const currentAllCommentsCounter = await prisma.comments.count();
-    
-      const proveCommentDeletionInputs: {
-        transition: string,
-        signature: string,
-        targets: string,
-        postState: string,
-        targetWitness: string,
-        currentAllCommentsCounter: string,
-        usersCommentsCounters: string,
-        targetsCommentsCounters: string,
-        initialComments: string,
-        latestComments: string,
-        initialCommentState: string,
-        commentWitness: string,
-        deletionBlockHeight: string
-      }[] = [];
-    
-      for (const pDeletion of pendingCommentDeletions) {
-
-        const comment = await prisma.comments.findUnique({
-          where: {
-            commentKey: pDeletion.targetKey
-          }
-        });
-
+      // Handle possible pending transaction confirmation or failure
+    } else {
+      for (const pendingCommentDeletion of pendingCommentDeletions) {
         const parent = await prisma.posts.findUnique({
           where: {
-            postKey: comment!.targetKey
+            postKey: pendingCommentDeletion!.targetKey
           }
         });
 
         const result = generateProveCommentDeletionInputs(
           parent,
-          comment!.isTargetPost,
-          comment!.targetKey,
-          comment!.commenterAddress,
-          comment!.commentContentID,
-          comment!.allCommentsCounter,
-          comment!.userCommentsCounter,
-          comment!.targetCommentsCounter,
-          comment!.commentBlockHeight,
-          comment!.restorationBlockHeight,
-          Field(comment!.commentKey),
-          pDeletion.deletionSignature,
-          Field(deletionBlockHeight),
-          Field(currentAllCommentsCounter)
+          pendingCommentDeletion.isTargetPost,
+          pendingCommentDeletion.targetKey,
+          pendingCommentDeletion.commenterAddress,
+          pendingCommentDeletion.commentContentID,
+          pendingCommentDeletion.allCommentsCounter,
+          pendingCommentDeletion.userCommentsCounter,
+          pendingCommentDeletion.targetCommentsCounter,
+          pendingCommentDeletion.commentBlockHeight,
+          pendingCommentDeletion.restorationBlockHeight,
+          Field(pendingCommentDeletion.commentKey),
+          pendingCommentDeletion.pendingSignature!,
+          Field(pendingCommentDeletion.pendingBlockHeight!),
+          Field(commentsContext.totalNumberOfComments)
         );
-    
-        proveCommentDeletionInputs.push(result);
+        proveCommentDeletionsInputs.push(result);
+      }
+      
+      try {
+        /* If a pending transaction was confirmed, syncing onchain and server state,
+          restart loop to process new actions
+        */
+        console.log('Syncing onchain and server state since last comment deletions:');
+        await assertCommentsOnchainAndServerState(pendingCommentDeletions, pendingCommentDeletions[0].pendingBlockHeight!);
+        continue;
+      } catch (error) {
+          /* If a pending transaction hasn't been successfully confirmed,
+            reset server state to process the pending actions with a new blockheight
+          */
+         if (error instanceof OnchainAndServerStateMismatchError) {
+          resetServerCommentUpdatesState(pendingCommentDeletions);
+         } else {
+          throw error;
+         }
+      }
+    }
+
+    if (pendingCommentDeletions.length !== 0) {
+      const lastBlock = await fetchLastBlock(configComments.url);
+      const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      console.log('Current blockheight for comment deletions: ' + currentBlockHeight);
+      proveCommentDeletionsInputs.length = 0;
+      for (const pendingCommentDeletion of pendingCommentDeletions) {
+        const parent = await prisma.posts.findUnique({
+          where: {
+            postKey: pendingCommentDeletion!.targetKey
+          }
+        });
+
+        const result = generateProveCommentDeletionInputs(
+          parent,
+          pendingCommentDeletion.isTargetPost,
+          pendingCommentDeletion.targetKey,
+          pendingCommentDeletion.commenterAddress,
+          pendingCommentDeletion.commentContentID,
+          pendingCommentDeletion.allCommentsCounter,
+          pendingCommentDeletion.userCommentsCounter,
+          pendingCommentDeletion.targetCommentsCounter,
+          pendingCommentDeletion.commentBlockHeight,
+          pendingCommentDeletion.restorationBlockHeight,
+          Field(pendingCommentDeletion.commentKey),
+          pendingCommentDeletion.pendingSignature!,
+          Field(currentBlockHeight),
+          Field(commentsContext.totalNumberOfComments)
+        );
+        proveCommentDeletionsInputs.push(result);
+        pendingCommentDeletion.status = 'deleting';
+        await prisma.comments.update({
+          where: {
+            commentKey: pendingCommentDeletion.commentKey
+          },
+          data: {
+            status: 'deleting',
+            pendingBlockHeight: currentBlockHeight
+          }
+        });
       }
 
       const jobsPromises: Promise<any>[] = [];
-
-      for (const proveCommentDeletionInput of proveCommentDeletionInputs) {
+      for (const proveCommentDeletionInputs of proveCommentDeletionsInputs) {
         const job = await commentDeletionsQueue.add(
           `job`,
-          { proveCommentDeletionInput: proveCommentDeletionInput }
+          { proveCommentDeletionInputs: proveCommentDeletionInputs }
         );
         jobsPromises.push(job.waitUntilFinished(commentDeletionsQueueEvents));
       }
-  
+
+      startTime = performance.now();
       const transitionsAndProofsAsStrings: {
         transition: string;
         proof: string;
       }[] = await Promise.all(jobsPromises);
-    
       const transitionsAndProofs: {
         transition: CommentsTransition,
         proof: CommentsProof
       }[] = [];
-
       for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: CommentsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
           proof: await CommentsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
       }
-  
       endTime = performance.now();
-      console.log(`${(endTime - startTime)/1000/60} minutes`);
-
-      if (transitionsAndProofs.length !== 0) {
-        startTime = performance.now();
-        await updateCommentsOnChainState(transitionsAndProofs);
-        endTime = performance.now();
-        console.log(`${(endTime - startTime)/1000/60} minutes`);
-    
-        let tries = 0;
-        let allCommentsCounterFetch;
-        let usersCommentsCountersFetch;
-        let targetsCommentsCountersFetch;
-        let commentsFetch;
-        while (tries < MAX_ATTEMPTS) {
-          console.log('Pause to wait for the transaction to confirm...');
-          await delay(20000);
-    
-          allCommentsCounterFetch = await commentsContract.allCommentsCounter.fetch();
-          console.log('allCommentsCounterFetch: ' + allCommentsCounterFetch?.toString());
-          usersCommentsCountersFetch = await commentsContract.usersCommentsCounters.fetch();
-          console.log('usersCommentsCountersFetch: ' + usersCommentsCountersFetch?.toString());
-          targetsCommentsCountersFetch = await commentsContract.targetsCommentsCounters.fetch();
-          console.log('targetsCommentsCountersFetch: ' + targetsCommentsCountersFetch?.toString());
-          commentsFetch = await commentsContract.comments.fetch();
-          console.log('commentsFetch: ' + commentsFetch?.toString());
-    
-          console.log(Field(commentsContext.totalNumberOfComments).toString());
-          console.log(usersCommentsCountersMap.getRoot().toString());
-          console.log(targetsCommentsCountersMap.getRoot().toString());
-          console.log(commentsMap.getRoot().toString());
-    
-          console.log(allCommentsCounterFetch?.equals(Field(commentsContext.totalNumberOfComments)).toBoolean());
-          console.log(usersCommentsCountersFetch?.equals(usersCommentsCountersMap.getRoot()).toBoolean());
-          console.log(targetsCommentsCountersFetch?.equals(targetsCommentsCountersMap.getRoot()).toBoolean());
-          console.log(commentsFetch?.equals(commentsMap.getRoot()).toBoolean());
-    
-          if (allCommentsCounterFetch?.equals(Field(commentsContext.totalNumberOfComments)).toBoolean()
-          && usersCommentsCountersFetch?.equals(usersCommentsCountersMap.getRoot()).toBoolean()
-          && targetsCommentsCountersFetch?.equals(targetsCommentsCountersMap.getRoot()).toBoolean()
-          && commentsFetch?.equals(commentsMap.getRoot()).toBoolean()) {
-            for (const pDeletion of pendingCommentDeletions) {
-              await prisma.comments.update({
-                  where: {
-                    commentKey: pDeletion.targetKey
-                  },
-                  data: {
-                    deletionBlockHeight: deletionBlockHeight
-                  }
-              });
-
-              await prisma.commentDeletions.update({
-                where: {
-                  allDeletionsCounter: pDeletion.allDeletionsCounter
-                },
-                data: {
-                  deletionBlockHeight: deletionBlockHeight
-                }
-              });
-            }
-            tries = MAX_ATTEMPTS;
-          }
-          // Reset initial state if transaction appears to have failed
-          if (tries === MAX_ATTEMPTS - 1) {
-
-            for (const pDeletion of pendingCommentDeletions) {
-
-              const target = await prisma.comments.findUnique({
-                where: {
-                  commentKey: pDeletion.targetKey
-                }
-              });
-
-              const commenterAddress = PublicKey.fromBase58(target!.commenterAddress);
-              const commenterAddressAsField = Poseidon.hash(commenterAddress.toFields());
-              const commentContentID = CircuitString.fromString(target!.commentContentID);
-        
-              const restoredTargetState = new CommentState({
-                isTargetPost: Bool(target!.isTargetPost),
-                targetKey: Field(target!.targetKey),
-                commenterAddress: commenterAddress,
-                commentContentID: commentContentID,
-                allCommentsCounter: Field(target!.allCommentsCounter),
-                userCommentsCounter: Field(target!.userCommentsCounter),
-                commentBlockHeight: Field(target!.commentBlockHeight),
-                targetCommentsCounter: Field(target!.targetCommentsCounter),
-                deletionBlockHeight: Field(target!.deletionBlockHeight),
-                restorationBlockHeight: Field(target!.restorationBlockHeight)
-              });
-
-              console.log('Initial commentsMap root: ' + commentsMap.getRoot().toString());
-              commentsMap.set(
-                  Poseidon.hash([Field(target!.targetKey), commenterAddressAsField, commentContentID.hash()]),
-                  restoredTargetState.hash()
-              );
-              console.log('Latest commentsMap root: ' + commentsMap.getRoot().toString());
-            }
-          }
-          tries++;
-        }
-      }
-  } else if (provingTurn === provingCommentRestorations) {
-
-    const pendingCommentRestorations = await prisma.commentRestorations.findMany({
-      take: Number(process.env.PARALLEL_NUMBER),
-      orderBy: {
-          allRestorationsCounter: 'asc'
-      },
-      where: {
-          restorationBlockHeight: 0
-      }
-      });
-      console.log('pendingCommentRestorations:');
-      console.log(pendingCommentRestorations);
+      console.log(`Created ${pendingCommentDeletions.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
     
       startTime = performance.now();
-    
-      const lastBlock = await fetchLastBlock(configComments.url);
-      const restorationBlockHeight = lastBlock.blockchainLength.toBigint();
-      console.log(restorationBlockHeight);
+      const pendingTransaction = await updateCommentsOnChainState(transitionsAndProofs);
+      endTime = performance.now();
+      console.log(`Merged ${pendingCommentDeletions.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
 
-      const currentAllCommentsCounter = await prisma.comments.count();
+      startTime = performance.now();
+      console.log('Confirming comment deletions transaction...');
+      let status = 'pending';
+      while (status === 'pending') {
+        status = await getTransactionStatus(pendingTransaction);
+      }
+      endTime = performance.now();
+      console.log(`Waited ${(endTime - startTime)/1000/60} minutes for transaction confirmation or rejection`);
 
-      const proveCommentRestorationInputs: {
-        transition: string,
-        signature: string,
-        targets: string,
-        postState: string,
-        targetWitness: string,
-        currentAllCommentsCounter: string,
-        usersCommentsCounters: string,
-        targetsCommentsCounters: string,
-        initialComments: string,
-        latestComments: string,
-        initialCommentState: string,
-        commentWitness: string,
-        restorationBlockHeight: string
-      }[] = [];
-    
-      for (const pRestoration of pendingCommentRestorations) {
+      if (status === 'rejected') {
+        resetServerCommentUpdatesState(pendingCommentDeletions);
+        continue;
+      }
 
-        const comment = await prisma.comments.findUnique({
-          where: {
-            commentKey: pRestoration.targetKey
-          }
-        });
+      await assertCommentsOnchainAndServerState(pendingCommentDeletions, currentBlockHeight);
+    }
 
+  } else if (provingTurn === provingCommentRestorations) {
+
+    let pendingCommentRestorations: CommentsFindMany;
+    let proveCommentRestorationsInputs: ProveCommentsUpdateInputs[] = [];
+
+    // Get actions that may have a pending associated transaction
+    pendingCommentRestorations = await prisma.comments.findMany({
+      take: Number(process.env.PARALLEL_NUMBER),
+      orderBy: {
+          allCommentsCounter: 'asc'
+      },
+      where: {
+          status: 'restoring'
+      }
+    });
+
+    // If there isn't a pending transaction, process new actions
+    if (pendingCommentRestorations.length === 0) {
+      pendingCommentRestorations = await prisma.comments.findMany({
+        take: Number(process.env.PARALLEL_NUMBER),
+        orderBy: {
+            allCommentsCounter: 'asc'
+        },
+        where: {
+            status: 'restore'
+        }
+      });
+      // Handle possible pending transaction confirmation or failure
+    } else {
+      for (const pendingCommentRestoration of pendingCommentRestorations) {
         const parent = await prisma.posts.findUnique({
           where: {
-            postKey: comment!.targetKey
+            postKey: pendingCommentRestoration!.targetKey
           }
         });
 
         const result = generateProveCommentRestorationInputs(
           parent,
-          comment!.isTargetPost,
-          comment!.targetKey,
-          comment!.commenterAddress,
-          comment!.commentContentID,
-          comment!.allCommentsCounter,
-          comment!.userCommentsCounter,
-          comment!.targetCommentsCounter,
-          comment!.commentBlockHeight,
-          comment!.deletionBlockHeight,
-          comment!.restorationBlockHeight,
-          Field(comment!.commentKey),
-          pRestoration.restorationSignature,
-          Field(restorationBlockHeight),
-          Field(currentAllCommentsCounter)
+          pendingCommentRestoration.isTargetPost,
+          pendingCommentRestoration.targetKey,
+          pendingCommentRestoration.commenterAddress,
+          pendingCommentRestoration.commentContentID,
+          pendingCommentRestoration.allCommentsCounter,
+          pendingCommentRestoration.userCommentsCounter,
+          pendingCommentRestoration.targetCommentsCounter,
+          pendingCommentRestoration.commentBlockHeight,
+          pendingCommentRestoration.deletionBlockHeight,
+          pendingCommentRestoration.restorationBlockHeight,
+          Field(pendingCommentRestoration!.commentKey),
+          pendingCommentRestoration.pendingSignature!,
+          Field(pendingCommentRestoration.pendingBlockHeight!),
+          Field(commentsContext.totalNumberOfComments)
         );
-    
-        proveCommentRestorationInputs.push(result);
+        proveCommentRestorationsInputs.push(result);
+      }
+      
+      try {
+        /* If a pending transaction was confirmed, syncing onchain and server state,
+          restart loop to process new actions
+        */
+        console.log('Syncing onchain and server state since last comment restorations:');
+        await assertCommentsOnchainAndServerState(pendingCommentRestorations, pendingCommentRestorations[0].pendingBlockHeight!);
+        continue;
+      } catch (error) {
+          /* If a pending transaction hasn't been successfully confirmed,
+            reset server state to process the pending actions with a new blockheight
+          */
+         if (error instanceof OnchainAndServerStateMismatchError) {
+          resetServerCommentUpdatesState(pendingCommentRestorations);
+         } else {
+          throw error;
+         }
+      }
+    }
+
+    if (pendingCommentRestorations.length !== 0) {
+      const lastBlock = await fetchLastBlock(configComments.url);
+      const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      console.log('Current blockheight for comment restorations: ' + currentBlockHeight);
+      proveCommentRestorationsInputs.length = 0;
+      for (const pendingCommentRestoration of pendingCommentRestorations) {
+        const parent = await prisma.posts.findUnique({
+          where: {
+            postKey: pendingCommentRestoration!.targetKey
+          }
+        });
+
+        const result = generateProveCommentRestorationInputs(
+          parent,
+          pendingCommentRestoration.isTargetPost,
+          pendingCommentRestoration.targetKey,
+          pendingCommentRestoration.commenterAddress,
+          pendingCommentRestoration.commentContentID,
+          pendingCommentRestoration.allCommentsCounter,
+          pendingCommentRestoration.userCommentsCounter,
+          pendingCommentRestoration.targetCommentsCounter,
+          pendingCommentRestoration.commentBlockHeight,
+          pendingCommentRestoration.deletionBlockHeight,
+          pendingCommentRestoration.restorationBlockHeight,
+          Field(pendingCommentRestoration.commentKey),
+          pendingCommentRestoration.pendingSignature!,
+          Field(currentBlockHeight),
+          Field(commentsContext.totalNumberOfComments)
+        );
+        proveCommentRestorationsInputs.push(result);
+        pendingCommentRestoration.status = 'restoring';
+        await prisma.comments.update({
+          where: {
+            commentKey: pendingCommentRestoration.commentKey
+          },
+          data: {
+            status: 'restoring',
+            pendingBlockHeight: currentBlockHeight
+          }
+        });
       }
 
       const jobsPromises: Promise<any>[] = [];
-
-      for (const proveCommentRestorationInput of proveCommentRestorationInputs) {
+      for (const proveCommentRestorationInputs of proveCommentRestorationsInputs) {
         const job = await commentRestorationsQueue.add(
           `job`,
-          { proveCommentRestorationInput: proveCommentRestorationInput }
+          { proveCommentRestorationInputs: proveCommentRestorationInputs }
         );
         jobsPromises.push(job.waitUntilFinished(commentRestorationsQueueEvents));
       }
-  
+
+      startTime = performance.now();
       const transitionsAndProofsAsStrings: {
         transition: string;
         proof: string;
       }[] = await Promise.all(jobsPromises);
-    
       const transitionsAndProofs: {
         transition: CommentsTransition,
         proof: CommentsProof
       }[] = [];
-
       for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: CommentsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
           proof: await CommentsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
       }
-  
       endTime = performance.now();
-      console.log(`${(endTime - startTime)/1000/60} minutes`);
-
-      if (transitionsAndProofs.length !== 0) {
-        startTime = performance.now();
-        await updateCommentsOnChainState(transitionsAndProofs);
-        endTime = performance.now();
-        console.log(`${(endTime - startTime)/1000/60} minutes`);
+      console.log(`Created ${pendingCommentRestorations.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
     
-        let tries = 0;
-        let allCommentsCounterFetch;
-        let usersCommentsCountersFetch;
-        let targetsCommentsCountersFetch;
-        let commentsFetch;
-        while (tries < MAX_ATTEMPTS) {
-          console.log('Pause to wait for the transaction to confirm...');
-          await delay(20000);
-    
-          allCommentsCounterFetch = await commentsContract.allCommentsCounter.fetch();
-          console.log('allCommentsCounterFetch: ' + allCommentsCounterFetch?.toString());
-          usersCommentsCountersFetch = await commentsContract.usersCommentsCounters.fetch();
-          console.log('usersCommentsCountersFetch: ' + usersCommentsCountersFetch?.toString());
-          targetsCommentsCountersFetch = await commentsContract.targetsCommentsCounters.fetch();
-          console.log('targetsCommentsCountersFetch: ' + targetsCommentsCountersFetch?.toString());
-          commentsFetch = await commentsContract.comments.fetch();
-          console.log('commentsFetch: ' + commentsFetch?.toString());
-    
-          console.log(Field(commentsContext.totalNumberOfComments).toString());
-          console.log(usersCommentsCountersMap.getRoot().toString());
-          console.log(targetsCommentsCountersMap.getRoot().toString());
-          console.log(commentsMap.getRoot().toString());
-    
-          console.log(allCommentsCounterFetch?.equals(Field(commentsContext.totalNumberOfComments)).toBoolean());
-          console.log(usersCommentsCountersFetch?.equals(usersCommentsCountersMap.getRoot()).toBoolean());
-          console.log(targetsCommentsCountersFetch?.equals(targetsCommentsCountersMap.getRoot()).toBoolean());
-          console.log(commentsFetch?.equals(commentsMap.getRoot()).toBoolean());
-    
-          if (allCommentsCounterFetch?.equals(Field(commentsContext.totalNumberOfComments)).toBoolean()
-          && usersCommentsCountersFetch?.equals(usersCommentsCountersMap.getRoot()).toBoolean()
-          && targetsCommentsCountersFetch?.equals(targetsCommentsCountersMap.getRoot()).toBoolean()
-          && commentsFetch?.equals(commentsMap.getRoot()).toBoolean()) {
-            for (const pRestoration of pendingCommentRestorations) {
-              await prisma.comments.update({
-                  where: {
-                    commentKey: pRestoration.targetKey
-                  },
-                  data: {
-                    deletionBlockHeight: 0,
-                    restorationBlockHeight: restorationBlockHeight
-                  }
-              });
+      startTime = performance.now();
+      const pendingTransaction = await updateCommentsOnChainState(transitionsAndProofs);
+      endTime = performance.now();
+      console.log(`Merged ${pendingCommentRestorations.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
 
-              await prisma.commentRestorations.update({
-                where: {
-                  allRestorationsCounter: pRestoration.allRestorationsCounter
-                },
-                data: {
-                  restorationBlockHeight: restorationBlockHeight
-                }
-              });
-            }
-            tries = MAX_ATTEMPTS;
-          }
-          // Reset initial state if transaction appears to have failed
-          if (tries === MAX_ATTEMPTS - 1) {
-
-            for (const pRestoration of pendingCommentRestorations) {
-
-              const target = await prisma.comments.findUnique({
-                where: {
-                  commentKey: pRestoration.targetKey
-                }
-              });
-
-              const commenterAddress = PublicKey.fromBase58(target!.commenterAddress);
-              const commenterAddressAsField = Poseidon.hash(commenterAddress.toFields());
-              const commentContentID = CircuitString.fromString(target!.commentContentID);
-        
-              const restoredTargetState = new CommentState({
-                isTargetPost: Bool(target!.isTargetPost),
-                targetKey: Field(target!.targetKey),
-                commenterAddress: commenterAddress,
-                commentContentID: commentContentID,
-                allCommentsCounter: Field(target!.allCommentsCounter),
-                userCommentsCounter: Field(target!.userCommentsCounter),
-                commentBlockHeight: Field(target!.commentBlockHeight),
-                targetCommentsCounter: Field(target!.targetCommentsCounter),
-                deletionBlockHeight: Field(target!.deletionBlockHeight),
-                restorationBlockHeight: Field(target!.restorationBlockHeight)
-              });
-
-              console.log('Initial commentsMap root: ' + commentsMap.getRoot().toString());
-              commentsMap.set(
-                  Poseidon.hash([Field(target!.targetKey), commenterAddressAsField, commentContentID.hash()]),
-                  restoredTargetState.hash()
-              );
-              console.log('Latest commentsMap root: ' + commentsMap.getRoot().toString());
-            }
-          }
-          tries++;
-        }
+      startTime = performance.now();
+      console.log('Confirming comment restorations transaction...');
+      let status = 'pending';
+      while (status === 'pending') {
+        status = await getTransactionStatus(pendingTransaction);
       }
+      endTime = performance.now();
+      console.log(`Waited ${(endTime - startTime)/1000/60} minutes for transaction confirmation or rejection`);
+
+      if (status === 'rejected') {
+        resetServerCommentUpdatesState(pendingCommentRestorations);
+        continue;
+      }
+
+      await assertCommentsOnchainAndServerState(pendingCommentRestorations, currentBlockHeight);
+    }
+
   } else if (provingTurn === provingRepostDeletions) {
 
     const pendingRepostDeletions = await prisma.repostDeletions.findMany({
@@ -2480,6 +2368,7 @@ function generateProvePostInputs(signatureBase58: string, posterAddressBase58: s
         postState,
         postWitness
       );
+      console.log('Post publication transition created');
 
       return {
         signature: signatureBase58,
@@ -2646,7 +2535,7 @@ async function generateProveReactionInputs(isTargetPost: boolean, targetKey: str
     reactionWitness,
     reactionState
   );
-  console.log('Transition created');
+  console.log('Reaction publication transition created');
 
   return {
     transition: JSON.stringify(transition),
@@ -2820,7 +2709,7 @@ async function generateProveCommentInputs(isTargetPost: boolean, targetKey: stri
     commentWitness,
     commentState
   );
-  console.log('Transition created');
+  console.log('Comment transition created');
 
   return {
     transition: JSON.stringify(transition),
@@ -2990,7 +2879,7 @@ async function generateProveRepostInputs(isTargetPost: boolean, targetKey: strin
     repostWitness,
     repostState
   );
-  console.log('Transition created');
+  console.log('Repost publication transition created');
 
   return {
     transition: JSON.stringify(transition),
@@ -3281,7 +3170,7 @@ function generateProveCommentDeletionInputs(parent: PostsFindUnique,
         commentWitness,
         deletionBlockHeight
       );
-      console.log('Transition created');
+      console.log('Comment deletion transition created');
 
       return {
         transition: JSON.stringify(transition),
@@ -3296,7 +3185,7 @@ function generateProveCommentDeletionInputs(parent: PostsFindUnique,
         latestComments: latestComments.toString(),
         initialCommentState: JSON.stringify(initialCommentState),
         commentWitness: JSON.stringify(commentWitness.toJSON()),
-        deletionBlockHeight: deletionBlockHeight.toString()
+        blockHeight: deletionBlockHeight.toString()
       }
 }
 
@@ -3372,7 +3261,7 @@ const commentCIDAsCircuitString = CircuitString.fromString(commentCID.toString()
       commentWitness,
       newRestorationBlockHeight
     );
-    console.log('Transition created');
+    console.log('Comment restoration transition created');
 
     return {
       transition: JSON.stringify(transition),
@@ -3387,7 +3276,7 @@ const commentCIDAsCircuitString = CircuitString.fromString(commentCID.toString()
       latestComments: latestComments.toString(),
       initialCommentState: JSON.stringify(initialCommentState),
       commentWitness: JSON.stringify(commentWitness.toJSON()),
-      restorationBlockHeight: newRestorationBlockHeight.toString()
+      blockHeight: newRestorationBlockHeight.toString()
     }
 }
   
@@ -3769,6 +3658,24 @@ type ProvePostInputs = {
   postWitness: string
 }
 
+type ProveCommentInputs = {
+  transition: string,
+  signature: string,
+  targets: string,
+  postState: string,
+  targetWitness: string,
+  commentState: string,
+  initialUsersCommentsCounters: string,
+  latestUsersCommentsCounters: string,
+  userCommentsCounterWitness: string,
+  initialTargetsCommentsCounters: string,
+  latestTargetsCommentsCounters: string,
+  targetCommentsCounterWitness: string,
+  initialComments: string,
+  latestComments: string,
+  commentWitness: string
+}
+
 type ProvePostUpdateInputs = {
   transition: string,
   signature: string,
@@ -3781,11 +3688,29 @@ type ProvePostUpdateInputs = {
   blockHeight: string
 }
 
+type ProveCommentsUpdateInputs = {
+  transition: string,
+  signature: string,
+  targets: string,
+  postState: string,
+  targetWitness: string,
+  currentAllCommentsCounter: string,
+  usersCommentsCounters: string,
+  targetsCommentsCounters: string,
+  initialComments: string,
+  latestComments: string,
+  initialCommentState: string,
+  commentWitness: string,
+  blockHeight: string
+}
+
 // ============================================================================
 
 type PostsFindMany = Prisma.PromiseReturnType<typeof prisma.posts.findMany>;
+type CommentsFindMany = Prisma.PromiseReturnType<typeof prisma.comments.findMany>;
 
 type PostsFindUnique = Prisma.PromiseReturnType<typeof prisma.posts.findUnique>;
+type CommentsFindUnique = Prisma.PromiseReturnType<typeof prisma.comments.findUnique>;
 
 // ============================================================================
 
@@ -3850,7 +3775,80 @@ async function assertPostsOnchainAndServerState(pendingPosts: PostsFindMany, blo
       }
     }
   } else {
-    throw new Error('There is a mismatch between onchain and server state');
+    throw new OnchainAndServerStateMismatchError('There is a mismatch between Posts onchain and server state');
+  }
+}
+
+// ============================================================================
+
+async function assertCommentsOnchainAndServerState(pendingComments: CommentsFindMany, blockHeight: bigint) {
+
+  const allCommentsCounterFetch = await commentsContract.allCommentsCounter.fetch();
+  console.log('allCommentsCounterFetch: ' + allCommentsCounterFetch!.toString());
+  const usersCommentsCountersFetch = await commentsContract.usersCommentsCounters.fetch();
+  console.log('usersCommentsCountersFetch: ' + usersCommentsCountersFetch!.toString());
+  const targetsCommentsCountersFetch = await commentsContract.targetsCommentsCounters.fetch();
+  console.log('targetsCommentsCountersFetch: ' + targetsCommentsCountersFetch!.toString());
+  const commentsFetch = await commentsContract.comments.fetch();
+  console.log('commentsFetch: ' + commentsFetch!.toString());
+
+  const allCommentsCounterAfter = Field(commentsContext.totalNumberOfComments);
+  console.log('allCommentsCounterAfter: ' + allCommentsCounterAfter.toString());
+  const usersCommentsCountersAfter = usersCommentsCountersMap.getRoot();
+  console.log('usersCommentsCountersAfter: ' + usersCommentsCountersAfter.toString());
+  const targetsCommentsCountersAfter = targetsCommentsCountersMap.getRoot();
+  console.log('targetsCommentsCountersAfter: ' + targetsCommentsCountersAfter.toString());
+  const commentsAfter = commentsMap.getRoot();
+  console.log('commentsAfter: ' + commentsAfter.toString());
+
+  const allCommentsCounterEqual = allCommentsCounterFetch!.equals(allCommentsCounterAfter).toBoolean();
+  console.log('allCommentsCounterEqual: ' + allCommentsCounterEqual);
+  const usersCommentsCountersEqual = usersCommentsCountersFetch!.equals(usersCommentsCountersAfter).toBoolean();
+  console.log('usersCommentsCountersEqual: ' + usersCommentsCountersEqual);
+  const targetsCommentsCountersEqual = targetsCommentsCountersFetch!.equals(targetsCommentsCountersAfter).toBoolean();
+  console.log('targetsCommentsCountersEqual: ' + targetsCommentsCountersEqual);
+  const commentsEqual = commentsFetch!.equals(commentsAfter).toBoolean();
+  console.log('commentsEqual: ' + commentsEqual);
+
+  const isUpdated = allCommentsCounterEqual && usersCommentsCountersEqual && targetsCommentsCountersEqual && commentsEqual;
+
+  if (isUpdated) {
+    for (const pComment of pendingComments) {
+      if (pComment.status === 'creating') {
+        await prisma.comments.update({
+          where: {
+            commentKey: pComment.commentKey
+          },
+          data: {
+            commentBlockHeight: blockHeight,
+            status: 'loading'
+          }
+        });
+      } else if (pComment.status === 'deleting') {
+        await prisma.comments.update({
+          where: {
+            commentKey: pComment.commentKey
+          },
+          data: {
+            deletionBlockHeight: blockHeight,
+            status: 'loading'
+          }
+        });
+      } else if (pComment.status === 'restoring') {
+        await prisma.comments.update({
+          where: {
+            commentKey: pComment.commentKey
+          },
+          data: {
+            deletionBlockHeight: 0,
+            restorationBlockHeight: blockHeight,
+            status: 'loading'
+          }
+        });
+      }
+    }
+  } else {
+    throw new OnchainAndServerStateMismatchError('There is a mismatch between Comments onchain and server state');
   }
 }
 
@@ -3880,12 +3878,9 @@ async function resetServerPostPublicationsState(pendingPosts: PostsFindMany) {
   };
 
   pendingPosts.forEach( pPost => {
-    const posterAddress = PublicKey.fromBase58(pPost.posterAddress);
-    const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
-    const postContentID = CircuitString.fromString(pPost.postContentID);
     console.log('Current postsMap root: ' + postsMap.getRoot().toString());
     postsMap.set(
-        Poseidon.hash([posterAddressAsField, postContentID.hash()]),
+        Field(pPost.postKey),
         Field(0)
     );
     console.log('Restored postsMap root: ' + postsMap.getRoot().toString());
@@ -3894,7 +3889,60 @@ async function resetServerPostPublicationsState(pendingPosts: PostsFindMany) {
 
 // ============================================================================
 
-async function resetServerPostUpdatesState(pendingPostUpdates: PostsFindMany) {
+async function resetServerCommentPublicationsState(pendingComments: CommentsFindMany) {
+  console.log('Current number of comments: ' + commentsContext.totalNumberOfComments);
+  commentsContext.totalNumberOfComments -= pendingComments.length;
+  console.log('Restored number of comments: ' + commentsContext.totalNumberOfComments);
+
+  const pendingCommenters = new Set(pendingComments.map( comment => comment.commenterAddress));
+  for (const commenter of pendingCommenters) {
+    const userComments = await prisma.comments.findMany({
+      where: { commenterAddress: commenter,
+        commentBlockHeight: {
+          not: 0
+        }
+      },
+      select: { userCommentsCounter: true }
+    });
+    console.log('Current usersCommentsCountersMap root: ' + usersCommentsCountersMap.getRoot().toString());
+    usersCommentsCountersMap.set(
+      Poseidon.hash(PublicKey.fromBase58(commenter).toFields()),
+      Field(userComments.length)
+    );
+    console.log('Restored usersCommentsCountersMap root: ' + usersCommentsCountersMap.getRoot().toString());
+  };
+
+  const pendingTargets = new Set(pendingComments.map( comment => comment.targetKey));
+  for (const target of pendingTargets) {
+    const targetComments = await prisma.comments.findMany({
+      where: { targetKey: target,
+        commentBlockHeight: {
+          not: 0
+        }
+      },
+      select: { targetCommentsCounter: true }
+    });
+    console.log('Current targetsCommentsCountersMap root: ' + targetsCommentsCountersMap.getRoot().toString());
+    targetsCommentsCountersMap.set(
+      Field(target),
+      Field(targetComments.length)
+    );
+    console.log('Restored targetsCommentsCountersMap root: ' + targetsCommentsCountersMap.getRoot().toString());
+  };
+
+  pendingComments.forEach( pComment => {
+    console.log('Current commentsMap root: ' + commentsMap.getRoot().toString());
+    commentsMap.set(
+        Field(pComment.commentKey),
+        Field(0)
+    );
+    console.log('Restored commentsMap root: ' + commentsMap.getRoot().toString());
+  });
+}
+
+// ============================================================================
+
+function resetServerPostUpdatesState(pendingPostUpdates: PostsFindMany) {
   for (const pendingPostUpdate of pendingPostUpdates) {
     const posterAddress = PublicKey.fromBase58(pendingPostUpdate!.posterAddress);
     const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
@@ -3916,6 +3964,36 @@ async function resetServerPostUpdatesState(pendingPostUpdates: PostsFindMany) {
         restoredPostState.hash()
     );
     console.log('Restored postsMap root: ' + postsMap.getRoot().toString());
+  }
+}
+
+// ============================================================================
+
+function resetServerCommentUpdatesState(pendingCommentUpdates: CommentsFindMany) {
+  for (const pendingCommentUpdate of pendingCommentUpdates) {
+    const commenterAddress = PublicKey.fromBase58(pendingCommentUpdate!.commenterAddress);
+    const commenterAddressAsField = Poseidon.hash(commenterAddress.toFields());
+    const commentContentID = CircuitString.fromString(pendingCommentUpdate!.commentContentID);
+
+    const restoredCommentState = new CommentState({
+      isTargetPost: Bool(pendingCommentUpdate!.isTargetPost),
+      targetKey: Field(pendingCommentUpdate!.targetKey),
+      commenterAddress: commenterAddress,
+      commentContentID: commentContentID,
+      allCommentsCounter: Field(pendingCommentUpdate!.allCommentsCounter),
+      userCommentsCounter: Field(pendingCommentUpdate!.userCommentsCounter),
+      commentBlockHeight: Field(pendingCommentUpdate!.commentBlockHeight),
+      targetCommentsCounter: Field(pendingCommentUpdate!.targetCommentsCounter),
+      deletionBlockHeight: Field(pendingCommentUpdate!.deletionBlockHeight),
+      restorationBlockHeight: Field(pendingCommentUpdate!.restorationBlockHeight)
+    });
+
+    console.log('Current commentsMap root: ' + commentsMap.getRoot().toString());
+    commentsMap.set(
+      Poseidon.hash([Field(pendingCommentUpdate!.targetKey), commenterAddressAsField, commentContentID.hash()]),
+      restoredCommentState.hash()
+    );
+    console.log('Restored commentsMap root: ' + commentsMap.getRoot().toString());
   }
 }
 

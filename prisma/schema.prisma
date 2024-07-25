@@ -7,24 +7,8 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model commentDeletions {
-  targetKey              String
-  allDeletionsCounter    BigInt @id
-  targetDeletionsCounter BigInt
-  deletionBlockHeight    BigInt
-  deletionSignature      String
-}
-
-model commentRestorations {
-  targetKey                 String
-  allRestorationsCounter    BigInt @id
-  targetRestorationsCounter BigInt
-  restorationBlockHeight    BigInt
-  restorationSignature      String
-}
-
 model comments {
-  commentKey             String  @id
+  commentKey             String       @id
   isTargetPost           Boolean
   targetKey              String
   commenterAddress       String
@@ -35,7 +19,9 @@ model comments {
   commentBlockHeight     BigInt
   deletionBlockHeight    BigInt
   restorationBlockHeight BigInt
-  commentSignature       String
+  status                 status_enum?
+  pendingBlockHeight     BigInt?
+  pendingSignature       String?
 }
 
 model posts {
