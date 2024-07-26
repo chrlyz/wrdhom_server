@@ -16,14 +16,12 @@ npm run build
 
 ### Copy keys and config.json file
 
-Follow the instructions in the [wrdhom_contracts](https://github.com/chrlyz/wrdhom_contracts) repository to generate the proper files and copy them into this one.
+Follow the instructions in the [wrdhom_contracts](https://github.com/chrlyz/wrdhom_contracts) repository to generate the `keys` directory and `config.json` file. Then copy them at the top level of your directory for this repository.
 
 ### Start server to receive requests
 
 - Create a Postgres database that follows the schema in the `/prisma/schema.prisma` file.
 - Set the `DATABASE_URL` variable in your `.env` file.
-- Create a [web3.storage](https://web3.storage/) account.
-- Set the `W3S_EMAIL` and `W3S_SPACE variables` in your .env file.
 
 ``` console
 npm run service
@@ -39,6 +37,8 @@ npm run workers
 ```
 
 ### Start prover to coordinate generation of proofs in parallel through workers
+
+- Set the `MAX_ATTEMPTS` and `INTERVAL` variables in your `.env` file, to define the behavior when waiting for a transaction to confirm.
 
 ``` console
 npm run prover
