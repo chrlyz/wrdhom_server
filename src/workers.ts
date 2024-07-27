@@ -31,15 +31,15 @@ console.log(`${(endTime - startTime)/1000/60} minutes`);
 
 new Worker('postsQueue', async job => {
 
-    const transition = PostsTransition.fromJSON(JSON.parse(job.data.provePostInput.transition));
-    const signature = Signature.fromBase58(job.data.provePostInput.signature);
-    const postState = PostState.fromJSON(JSON.parse(job.data.provePostInput.postState)) as PostState;
-    const initialUsersPostsCounters = Field(job.data.provePostInput.initialUsersPostsCounters);
-    const latestUsersPostsCounters = Field(job.data.provePostInput.latestUsersPostsCounters);
-    const initialPosts = Field(job.data.provePostInput.initialPosts);
-    const latestPosts = Field(job.data.provePostInput.latestPosts);
-    const postWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.provePostInput.postWitness));
-    const userPostsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.provePostInput.userPostsCounterWitness));
+    const transition = PostsTransition.fromJSON(JSON.parse(job.data.provePostInputs.transition));
+    const signature = Signature.fromBase58(job.data.provePostInputs.signature);
+    const postState = PostState.fromJSON(JSON.parse(job.data.provePostInputs.postState)) as PostState;
+    const initialUsersPostsCounters = Field(job.data.provePostInputs.initialUsersPostsCounters);
+    const latestUsersPostsCounters = Field(job.data.provePostInputs.latestUsersPostsCounters);
+    const initialPosts = Field(job.data.provePostInputs.initialPosts);
+    const latestPosts = Field(job.data.provePostInputs.latestPosts);
+    const postWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.provePostInputs.postWitness));
+    const userPostsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.provePostInputs.userPostsCounterWitness));
     
     const proof = await Posts.provePostPublishingTransition(
       transition,
