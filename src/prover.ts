@@ -137,13 +137,12 @@ console.log(`${(endTime - startTime)/1000/60} minutes`);
 
 let usersPostsCountersMap = new MerkleMap();
 let postsMap = new MerkleMap();
-let totalNumberOfPosts = 0;
 
 const postsContext = {
   prisma: prisma,
   usersPostsCountersMap: usersPostsCountersMap,
   postsMap: postsMap,
-  totalNumberOfPosts: totalNumberOfPosts
+  totalNumberOfPosts: 0
 }
 
 await regeneratePostsZkAppState(postsContext);
@@ -151,14 +150,13 @@ await regeneratePostsZkAppState(postsContext);
 const usersReactionsCountersMap = new MerkleMap();
 const targetsReactionsCountersMap =  new MerkleMap();
 const reactionsMap = new MerkleMap();
-let totalNumberOfReactions = 0;
 
 const reactionsContext = {
   prisma: prisma,
   usersReactionsCountersMap: usersReactionsCountersMap,
   targetsReactionsCountersMap: targetsReactionsCountersMap,
   reactionsMap: reactionsMap,
-  totalNumberOfReactions: totalNumberOfReactions
+  totalNumberOfReactions: 0
 }
 
 await regenerateReactionsZkAppState(reactionsContext);
@@ -166,14 +164,13 @@ await regenerateReactionsZkAppState(reactionsContext);
 const usersCommentsCountersMap = new MerkleMap();
 const targetsCommentsCountersMap =  new MerkleMap();
 const commentsMap = new MerkleMap();
-let totalNumberOfComments = 0;
 
 const commentsContext = {
   prisma: prisma,
   usersCommentsCountersMap: usersCommentsCountersMap,
   targetsCommentsCountersMap: targetsCommentsCountersMap,
   commentsMap: commentsMap,
-  totalNumberOfComments: totalNumberOfComments
+  totalNumberOfComments: 0
 }
 
 await regenerateCommentsZkAppState(commentsContext);
@@ -181,14 +178,13 @@ await regenerateCommentsZkAppState(commentsContext);
 const usersRepostsCountersMap = new MerkleMap();
 const targetsRepostsCountersMap =  new MerkleMap();
 const repostsMap = new MerkleMap();
-let totalNumberOfReposts = 0;
 
 const repostsContext = {
   prisma: prisma,
   usersRepostsCountersMap: usersRepostsCountersMap,
   targetsRepostsCountersMap: targetsRepostsCountersMap,
   repostsMap: repostsMap,
-  totalNumberOfReposts: totalNumberOfReposts
+  totalNumberOfReposts: 0
 }
 
 await regenerateRepostsZkAppState(repostsContext);
@@ -221,7 +217,7 @@ while (true) {
   if (provingTurn === provingPosts) {
 
     let pendingPosts: PostsFindMany;
-    let provePostInputs: ProvePostInputs[] = [];
+    let provePostsInputs: ProvePostPublicationInputs[] = [];
 
     // Get actions that may have a pending associated transaction
     pendingPosts = await prisma.posts.findMany({
@@ -249,7 +245,7 @@ while (true) {
     } else {
       postsContext.totalNumberOfPosts += pendingPosts.length;
       for (const pPost of pendingPosts) {
-        const result = generateProvePostInputs(
+        const result = generateProvePostPublicationInputs(
           pPost.pendingSignature!,
           pPost.posterAddress,
           pPost.postContentID,
@@ -259,7 +255,7 @@ while (true) {
           pPost.deletionBlockHeight,
           pPost.restorationBlockHeight
         );
-        provePostInputs.push(result);
+        provePostsInputs.push(result);
       }
       
       try {
@@ -286,9 +282,9 @@ while (true) {
       const lastBlock = await fetchLastBlock(configPosts.url);
       const currentBlockHeight = lastBlock.blockchainLength.toBigint();
       console.log('Current blockheight for post publications: ' + currentBlockHeight);
-      provePostInputs.length = 0;
+      provePostsInputs.length = 0;
       for (const pPost of pendingPosts) {
-        const result = generateProvePostInputs(
+        const result = generateProvePostPublicationInputs(
           pPost.pendingSignature!,
           pPost.posterAddress,
           pPost.postContentID,
@@ -298,7 +294,7 @@ while (true) {
           pPost.deletionBlockHeight,
           pPost.restorationBlockHeight
         );
-        provePostInputs.push(result);
+        provePostsInputs.push(result);
         pPost.status = 'creating';
         await prisma.posts.update({
           where: {
@@ -312,10 +308,10 @@ while (true) {
       }
 
       const jobsPromises: Promise<any>[] = [];
-      for (const provePostInput of provePostInputs) {
+      for (const provePostInputs of provePostsInputs) {
         const job = await postsQueue.add(
           `job`,
-          { provePostInput: provePostInput }
+          { provePostInputs: provePostInputs }
         );
         jobsPromises.push(job.waitUntilFinished(postsQueueEvents));
       }
@@ -401,7 +397,7 @@ while (true) {
       }[] = [];
     
       for (const pReaction of pendingReactions) {
-        const result = await generateProveReactionInputs(
+        const result = await generateProveReactionPublicationInputs(
           pReaction.isTargetPost,
           pReaction.targetKey,
           pReaction.reactorAddress,
@@ -557,7 +553,7 @@ while (true) {
   } else if (provingTurn === provingComments) {
 
     let pendingComments: CommentsFindMany;
-    let proveCommentsInputs: ProveCommentInputs[] = [];
+    let proveCommentsInputs: ProveCommentPublicationInputs[] = [];
 
     // Get actions that may have a pending associated transaction
     pendingComments = await prisma.comments.findMany({
@@ -585,7 +581,7 @@ while (true) {
     } else {
       commentsContext.totalNumberOfComments += pendingComments.length;
       for (const pComment of pendingComments) {
-        const result = await generateProveCommentInputs(
+        const result = await generateProveCommentPublicationInputs(
           pComment.isTargetPost,
           pComment.targetKey,
           pComment.commenterAddress,
@@ -627,7 +623,7 @@ while (true) {
       console.log('Current blockheight for comment publications: ' + currentBlockHeight);
       proveCommentsInputs.length = 0;
       for (const pComment of pendingComments) {
-        const result = await generateProveCommentInputs(
+        const result = await generateProveCommentPublicationInputs(
           pComment.isTargetPost,
           pComment.targetKey,
           pComment.commenterAddress,
@@ -743,7 +739,7 @@ while (true) {
       }[] = [];
     
       for (const pRepost of pendingReposts) {
-        const result = await generateProveRepostInputs(
+        const result = await generateProveRepostPublicationInputs(
           pRepost.isTargetPost,
           pRepost.targetKey,
           pRepost.reposterAddress,
@@ -925,14 +921,14 @@ while (true) {
        // Handle possible pending transaction confirmation or failure
      } else {
        for (const pendingPostDeletion of pendingPostDeletions) {
-         const result = generatePostDeletionInputs(
-          pendingPostDeletion!.posterAddress,
-          pendingPostDeletion!.postContentID,
-          pendingPostDeletion!.allPostsCounter,
-          pendingPostDeletion!.userPostsCounter,
-          pendingPostDeletion!.postBlockHeight,
-          pendingPostDeletion!.restorationBlockHeight,
-          Field(pendingPostDeletion!.postKey),
+         const result = generateProvePostDeletionInputs(
+          pendingPostDeletion.posterAddress,
+          pendingPostDeletion.postContentID,
+          pendingPostDeletion.allPostsCounter,
+          pendingPostDeletion.userPostsCounter,
+          pendingPostDeletion.postBlockHeight,
+          pendingPostDeletion.restorationBlockHeight,
+          Field(pendingPostDeletion.postKey),
           pendingPostDeletion.pendingSignature!,
           Field(pendingPostDeletion.pendingBlockHeight!),
           Field(postsContext.totalNumberOfPosts)
@@ -965,14 +961,14 @@ while (true) {
        console.log('Current blockheight for post deletions: ' + currentBlockHeight);
        provePostDeletionsInputs.length = 0;
        for (const pendingPostDeletion of pendingPostDeletions) {
-         const result = generatePostDeletionInputs(
-          pendingPostDeletion!.posterAddress,
-          pendingPostDeletion!.postContentID,
-          pendingPostDeletion!.allPostsCounter,
-          pendingPostDeletion!.userPostsCounter,
-          pendingPostDeletion!.postBlockHeight,
-          pendingPostDeletion!.restorationBlockHeight,
-          Field(pendingPostDeletion!.postKey),
+         const result = generateProvePostDeletionInputs(
+          pendingPostDeletion.posterAddress,
+          pendingPostDeletion.postContentID,
+          pendingPostDeletion.allPostsCounter,
+          pendingPostDeletion.userPostsCounter,
+          pendingPostDeletion.postBlockHeight,
+          pendingPostDeletion.restorationBlockHeight,
+          Field(pendingPostDeletion.postKey),
           pendingPostDeletion.pendingSignature!,
           Field(currentBlockHeight),
           Field(postsContext.totalNumberOfPosts)
@@ -1070,15 +1066,15 @@ while (true) {
       // Handle possible pending transaction confirmation or failure
     } else {
       for (const pendingPostRestoration of pendingPostRestorations) {
-        const result = generatePostRestorationInputs(
-          pendingPostRestoration!.posterAddress,
-          pendingPostRestoration!.postContentID,
-          pendingPostRestoration!.allPostsCounter,
-          pendingPostRestoration!.userPostsCounter,
-          pendingPostRestoration!.postBlockHeight,
-          pendingPostRestoration!.deletionBlockHeight,
-          pendingPostRestoration!.restorationBlockHeight,
-          Field(pendingPostRestoration!.postKey),
+        const result = generateProvePostRestorationInputs(
+          pendingPostRestoration.posterAddress,
+          pendingPostRestoration.postContentID,
+          pendingPostRestoration.allPostsCounter,
+          pendingPostRestoration.userPostsCounter,
+          pendingPostRestoration.postBlockHeight,
+          pendingPostRestoration.deletionBlockHeight,
+          pendingPostRestoration.restorationBlockHeight,
+          Field(pendingPostRestoration.postKey),
           pendingPostRestoration.pendingSignature!,
           Field(pendingPostRestoration.pendingBlockHeight!),
           Field(postsContext.totalNumberOfPosts)
@@ -1111,15 +1107,15 @@ while (true) {
       console.log('Current blockheight for post restorations: ' + currentBlockHeight);
       provePostRestorationsInputs.length = 0;
       for (const pendingPostRestoration of pendingPostRestorations) {
-        const result = generatePostRestorationInputs(
-          pendingPostRestoration!.posterAddress,
-          pendingPostRestoration!.postContentID,
-          pendingPostRestoration!.allPostsCounter,
-          pendingPostRestoration!.userPostsCounter,
-          pendingPostRestoration!.postBlockHeight,
-          pendingPostRestoration!.deletionBlockHeight,
-          pendingPostRestoration!.restorationBlockHeight,
-          Field(pendingPostRestoration!.postKey),
+        const result = generateProvePostRestorationInputs(
+          pendingPostRestoration.posterAddress,
+          pendingPostRestoration.postContentID,
+          pendingPostRestoration.allPostsCounter,
+          pendingPostRestoration.userPostsCounter,
+          pendingPostRestoration.postBlockHeight,
+          pendingPostRestoration.deletionBlockHeight,
+          pendingPostRestoration.restorationBlockHeight,
+          Field(pendingPostRestoration.postKey),
           pendingPostRestoration.pendingSignature!,
           Field(currentBlockHeight),
           Field(postsContext.totalNumberOfPosts)
@@ -1218,7 +1214,7 @@ while (true) {
       for (const pendingCommentDeletion of pendingCommentDeletions) {
         const parent = await prisma.posts.findUnique({
           where: {
-            postKey: pendingCommentDeletion!.targetKey
+            postKey: pendingCommentDeletion.targetKey
           }
         });
 
@@ -1268,7 +1264,7 @@ while (true) {
       for (const pendingCommentDeletion of pendingCommentDeletions) {
         const parent = await prisma.posts.findUnique({
           where: {
-            postKey: pendingCommentDeletion!.targetKey
+            postKey: pendingCommentDeletion.targetKey
           }
         });
 
@@ -1382,7 +1378,7 @@ while (true) {
       for (const pendingCommentRestoration of pendingCommentRestorations) {
         const parent = await prisma.posts.findUnique({
           where: {
-            postKey: pendingCommentRestoration!.targetKey
+            postKey: pendingCommentRestoration.targetKey
           }
         });
 
@@ -1398,7 +1394,7 @@ while (true) {
           pendingCommentRestoration.commentBlockHeight,
           pendingCommentRestoration.deletionBlockHeight,
           pendingCommentRestoration.restorationBlockHeight,
-          Field(pendingCommentRestoration!.commentKey),
+          Field(pendingCommentRestoration.commentKey),
           pendingCommentRestoration.pendingSignature!,
           Field(pendingCommentRestoration.pendingBlockHeight!),
           Field(commentsContext.totalNumberOfComments)
@@ -1433,7 +1429,7 @@ while (true) {
       for (const pendingCommentRestoration of pendingCommentRestorations) {
         const parent = await prisma.posts.findUnique({
           where: {
-            postKey: pendingCommentRestoration!.targetKey
+            postKey: pendingCommentRestoration.targetKey
           }
         });
 
@@ -1765,7 +1761,7 @@ while (true) {
           }
         });
 
-        const result = generateProveRepostRestoration(
+        const result = generateProveRepostRestorationInputs(
           parent,
           repost!.isTargetPost,
           repost!.targetKey,
@@ -1964,7 +1960,7 @@ while (true) {
           }
         });
 
-        const result = generateReactionDeletionInputs(
+        const result = generateProveReactionDeletionInputs(
           parent,
           reaction!.isTargetPost,
           reaction!.targetKey,
@@ -2164,7 +2160,7 @@ while (true) {
           }
         });
 
-        const result = generateReactionRestorationInputs(
+        const result = generateProveReactionRestorationInputs(
           parent,
           reaction!.isTargetPost,
           reaction!.targetKey,
@@ -2325,7 +2321,7 @@ while (true) {
 
 // ============================================================================
 
-function generateProvePostInputs(signatureBase58: string, posterAddressBase58: string,
+function generateProvePostPublicationInputs(signatureBase58: string, posterAddressBase58: string,
   postCID: string, allPostsCounter: bigint, userPostsCounter: bigint,
   postBlockHeight: bigint, deletionBlockHeight: bigint, restorationBlockHeight: bigint) {
 
@@ -2457,7 +2453,7 @@ async function updatePostsOnChainState(transitionsAndProofs: PostTransitionAndPr
 
 // ============================================================================
 
-async function generateProveReactionInputs(isTargetPost: boolean, targetKey: string,
+async function generateProveReactionPublicationInputs(isTargetPost: boolean, targetKey: string,
   reactorAddressBase58: string, reactionCodePoint: bigint,
   allReactionsCounter: bigint, userReactionsCounter: bigint,
   targetReactionsCounter: bigint, reactionBlockHeight: bigint,
@@ -2630,7 +2626,7 @@ async function updateReactionsOnChainState(transitionsAndProofs: ReactionTransit
 
 // ============================================================================
 
-async function generateProveCommentInputs(isTargetPost: boolean, targetKey: string,
+async function generateProveCommentPublicationInputs(isTargetPost: boolean, targetKey: string,
   commenterAddressBase58: string, commentContentID: string,
   allCommentsCounter: bigint, userCommentsCounter: bigint,
   targetCommentsCounter: bigint, commentBlockHeight: bigint,
@@ -2804,7 +2800,7 @@ async function updateCommentsOnChainState(transitionsAndProofs: CommentTransitio
 
 // ============================================================================
 
-async function generateProveRepostInputs(isTargetPost: boolean, targetKey: string,
+async function generateProveRepostPublicationInputs(isTargetPost: boolean, targetKey: string,
   reposterAddressBase58: string, allRepostsCounter: bigint,
   userRepostsCounter: bigint, targetRepostsCounter: bigint,
   repostBlockHeight: bigint, deletionBlockHeight: bigint,
@@ -2974,7 +2970,7 @@ async function updateRepostsOnChainState(transitionsAndProofs: RepostTransitionA
 
 // ============================================================================
 
-function generatePostDeletionInputs(posterAddressBase58: string,
+function generateProvePostDeletionInputs(posterAddressBase58: string,
   postCID: string, allPostsCounter: bigint, userPostsCounter: bigint,
   postBlockHeight: bigint, restorationBlockHeight: bigint,
   postKey: Field, signatureBase58: string, deletionBlockHeight: Field,
@@ -3037,7 +3033,7 @@ function generatePostDeletionInputs(posterAddressBase58: string,
 
 // ============================================================================
 
-function generatePostRestorationInputs(posterAddressBase58: string,
+function generateProvePostRestorationInputs(posterAddressBase58: string,
   postCID: string, allPostsCounter: bigint, userPostsCounter: bigint,
   postBlockHeight: bigint, deletionBlockHeight: bigint, restorationBlockHeight: bigint,
   postKey: Field, signatureBase58: string, newRestorationBlockHeight: Field,
@@ -3370,7 +3366,7 @@ const reposterAddress = PublicKey.fromBase58(reposterAddressBase58);
 
 // ============================================================================
 
-function generateProveRepostRestoration(parent: PostsFindUnique,
+function generateProveRepostRestorationInputs(parent: PostsFindUnique,
 isTargetPost: boolean, targetKey: string, reposterAddressBase58: string,
 allRepostsCounter: bigint, userRepostsCounter: bigint, targetRepostsCounter: bigint, repostBlockHeight: bigint,
 deletionBlockHeight: bigint, restorationBlockHeight: bigint, repostKey: Field,
@@ -3458,7 +3454,7 @@ const reposterAddress = PublicKey.fromBase58(reposterAddressBase58);
 
 // ============================================================================
 
-function generateReactionDeletionInputs(parent: PostsFindUnique,
+function generateProveReactionDeletionInputs(parent: PostsFindUnique,
 isTargetPost: boolean, targetKey: string, reactorAddressBase58: string,
 reactionCodePoint: bigint, allReactionsCounter: bigint, userReactionsCounter: bigint, targetReactionsCounter: bigint,
 reactionBlockHeight: bigint, restorationBlockHeight: bigint, reactionKey: Field, signatureBase58: string,
@@ -3549,7 +3545,7 @@ const reactionCodePointAsField = Field(reactionCodePoint);
 
 // ============================================================================
 
-function generateReactionRestorationInputs(parent: PostsFindUnique,
+function generateProveReactionRestorationInputs(parent: PostsFindUnique,
 isTargetPost: boolean, targetKey: string, reactorAddressBase58: string,
 reactionCodePoint: bigint, allReactionsCounter: bigint, userReactionsCounter: bigint, targetReactionsCounter: bigint,
 reactionBlockHeight: bigint, deletionBlockHeight: bigint, restorationBlockHeight: bigint, reactionKey: Field, signatureBase58: string,
@@ -3646,7 +3642,7 @@ const reactionCodePointAsField = Field(reactionCodePoint);
 
 // ============================================================================
 
-type ProvePostInputs = {
+type ProvePostPublicationInputs = {
   signature: string,
   transition: string,
   postState: string,
@@ -3658,7 +3654,7 @@ type ProvePostInputs = {
   postWitness: string
 }
 
-type ProveCommentInputs = {
+type ProveCommentPublicationInputs = {
   transition: string,
   signature: string,
   targets: string,
@@ -3710,7 +3706,6 @@ type PostsFindMany = Prisma.PromiseReturnType<typeof prisma.posts.findMany>;
 type CommentsFindMany = Prisma.PromiseReturnType<typeof prisma.comments.findMany>;
 
 type PostsFindUnique = Prisma.PromiseReturnType<typeof prisma.posts.findUnique>;
-type CommentsFindUnique = Prisma.PromiseReturnType<typeof prisma.comments.findUnique>;
 
 // ============================================================================
 
@@ -3944,18 +3939,18 @@ async function resetServerCommentPublicationsState(pendingComments: CommentsFind
 
 function resetServerPostUpdatesState(pendingPostUpdates: PostsFindMany) {
   for (const pendingPostUpdate of pendingPostUpdates) {
-    const posterAddress = PublicKey.fromBase58(pendingPostUpdate!.posterAddress);
+    const posterAddress = PublicKey.fromBase58(pendingPostUpdate.posterAddress);
     const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
-    const postContentID = CircuitString.fromString(pendingPostUpdate!.postContentID);
+    const postContentID = CircuitString.fromString(pendingPostUpdate.postContentID);
 
     const restoredPostState = new PostState({
       posterAddress: posterAddress,
       postContentID: postContentID,
-      allPostsCounter: Field(pendingPostUpdate!.allPostsCounter),
-      userPostsCounter: Field(pendingPostUpdate!.userPostsCounter),
-      postBlockHeight: Field(pendingPostUpdate!.postBlockHeight),
-      deletionBlockHeight: Field(pendingPostUpdate!.deletionBlockHeight),
-      restorationBlockHeight: Field(pendingPostUpdate!.restorationBlockHeight)
+      allPostsCounter: Field(pendingPostUpdate.allPostsCounter),
+      userPostsCounter: Field(pendingPostUpdate.userPostsCounter),
+      postBlockHeight: Field(pendingPostUpdate.postBlockHeight),
+      deletionBlockHeight: Field(pendingPostUpdate.deletionBlockHeight),
+      restorationBlockHeight: Field(pendingPostUpdate.restorationBlockHeight)
     });
 
     console.log('Current postsMap root: ' + postsMap.getRoot().toString());
@@ -3971,26 +3966,26 @@ function resetServerPostUpdatesState(pendingPostUpdates: PostsFindMany) {
 
 function resetServerCommentUpdatesState(pendingCommentUpdates: CommentsFindMany) {
   for (const pendingCommentUpdate of pendingCommentUpdates) {
-    const commenterAddress = PublicKey.fromBase58(pendingCommentUpdate!.commenterAddress);
+    const commenterAddress = PublicKey.fromBase58(pendingCommentUpdate.commenterAddress);
     const commenterAddressAsField = Poseidon.hash(commenterAddress.toFields());
-    const commentContentID = CircuitString.fromString(pendingCommentUpdate!.commentContentID);
+    const commentContentID = CircuitString.fromString(pendingCommentUpdate.commentContentID);
 
     const restoredCommentState = new CommentState({
-      isTargetPost: Bool(pendingCommentUpdate!.isTargetPost),
-      targetKey: Field(pendingCommentUpdate!.targetKey),
+      isTargetPost: Bool(pendingCommentUpdate.isTargetPost),
+      targetKey: Field(pendingCommentUpdate.targetKey),
       commenterAddress: commenterAddress,
       commentContentID: commentContentID,
-      allCommentsCounter: Field(pendingCommentUpdate!.allCommentsCounter),
-      userCommentsCounter: Field(pendingCommentUpdate!.userCommentsCounter),
-      commentBlockHeight: Field(pendingCommentUpdate!.commentBlockHeight),
-      targetCommentsCounter: Field(pendingCommentUpdate!.targetCommentsCounter),
-      deletionBlockHeight: Field(pendingCommentUpdate!.deletionBlockHeight),
-      restorationBlockHeight: Field(pendingCommentUpdate!.restorationBlockHeight)
+      allCommentsCounter: Field(pendingCommentUpdate.allCommentsCounter),
+      userCommentsCounter: Field(pendingCommentUpdate.userCommentsCounter),
+      commentBlockHeight: Field(pendingCommentUpdate.commentBlockHeight),
+      targetCommentsCounter: Field(pendingCommentUpdate.targetCommentsCounter),
+      deletionBlockHeight: Field(pendingCommentUpdate.deletionBlockHeight),
+      restorationBlockHeight: Field(pendingCommentUpdate.restorationBlockHeight)
     });
 
     console.log('Current commentsMap root: ' + commentsMap.getRoot().toString());
     commentsMap.set(
-      Poseidon.hash([Field(pendingCommentUpdate!.targetKey), commenterAddressAsField, commentContentID.hash()]),
+      Poseidon.hash([Field(pendingCommentUpdate.targetKey), commenterAddressAsField, commentContentID.hash()]),
       restoredCommentState.hash()
     );
     console.log('Restored commentsMap root: ' + commentsMap.getRoot().toString());

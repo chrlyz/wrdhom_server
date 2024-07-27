@@ -37,31 +37,30 @@ const prisma = new PrismaClient();
 
 const usersPostsCountersMap = new MerkleMap();
 const postsMap = new MerkleMap();
-let totalNumberOfPosts = 0;
 
 const postsContext = {
   prisma: prisma,
   usersPostsCountersMap: usersPostsCountersMap,
   postsMap: postsMap,
-  totalNumberOfPosts: totalNumberOfPosts
+  totalNumberOfPosts: 0
 }
 
 await regeneratePostsZkAppState(postsContext);
 
-console.log('usersPostsCountersMap: ' + usersPostsCountersMap.getRoot().toString())
-console.log('postsMap: ' + postsMap.getRoot().toString())
+console.log('totalNumberOfPosts: ' + postsContext.totalNumberOfPosts);
+console.log('usersPostsCountersMap: ' + usersPostsCountersMap.getRoot().toString());
+console.log('postsMap: ' + postsMap.getRoot().toString());
 
 const usersReactionsCountersMap = new MerkleMap();
 const targetsReactionsCountersMap =  new MerkleMap();
 const reactionsMap = new MerkleMap();
-let totalNumberOfReactions = 0;
 
 const reactionsContext = {
   prisma: prisma,
   usersReactionsCountersMap: usersReactionsCountersMap,
   targetsReactionsCountersMap: targetsReactionsCountersMap,
   reactionsMap: reactionsMap,
-  totalNumberOfReactions: totalNumberOfReactions
+  totalNumberOfReactions: 0
 }
 
 await regenerateReactionsZkAppState(reactionsContext);
@@ -69,33 +68,32 @@ await regenerateReactionsZkAppState(reactionsContext);
 const usersCommentsCountersMap = new MerkleMap();
 const targetsCommentsCountersMap =  new MerkleMap();
 const commentsMap = new MerkleMap();
-let totalNumberOfComments = 0;
 
 const commentsContext = {
   prisma: prisma,
   usersCommentsCountersMap: usersCommentsCountersMap,
   targetsCommentsCountersMap: targetsCommentsCountersMap,
   commentsMap: commentsMap,
-  totalNumberOfComments: totalNumberOfComments
+  totalNumberOfComments: 0
 }
 
 await regenerateCommentsZkAppState(commentsContext);
 
-console.log('usersCommentsCountersMap: ' + usersCommentsCountersMap.getRoot().toString())
-console.log('targetsCommentsCountersMap: ' + targetsCommentsCountersMap.getRoot().toString())
-console.log('commentsMap: ' + commentsMap.getRoot().toString())
+console.log('totalNumberOfComments: ' + commentsContext.totalNumberOfComments);
+console.log('usersCommentsCountersMap: ' + usersCommentsCountersMap.getRoot().toString());
+console.log('targetsCommentsCountersMap: ' + targetsCommentsCountersMap.getRoot().toString());
+console.log('commentsMap: ' + commentsMap.getRoot().toString());
 
 const usersRepostsCountersMap = new MerkleMap();
 const targetsRepostsCountersMap =  new MerkleMap();
 const repostsMap = new MerkleMap();
-let totalNumberOfReposts = 0;
 
 const repostsContext = {
   prisma: prisma,
   usersRepostsCountersMap: usersRepostsCountersMap,
   targetsRepostsCountersMap: targetsRepostsCountersMap,
   repostsMap: repostsMap,
-  totalNumberOfReposts: totalNumberOfReposts
+  totalNumberOfReposts: 0
 }
 
 await regenerateRepostsZkAppState(repostsContext);
@@ -213,7 +211,7 @@ const syncStateTask = new AsyncTask(
         usersPostsCountersMap.set(posterAddressAsField, userPostsCounter);
       }
       
-
+      console.log('totalNumberOfPosts: ' + postsContext.totalNumberOfPosts);
       console.log('usersPostsCountersMap: ' + usersPostsCountersMap.getRoot().toString())
       console.log('postsMap: ' + postsMap.getRoot().toString())
 
@@ -308,9 +306,10 @@ const syncStateTask = new AsyncTask(
         targetsCommentsCountersMap.set(Field(pComment.targetKey), Field(pComment.targetCommentsCounter));
       }
       
-      console.log('usersCommentsCountersMap: ' + usersCommentsCountersMap.getRoot().toString())
-      console.log('targetsCommentsCountersMap: ' + targetsCommentsCountersMap.getRoot().toString())
-      console.log('commentsMap: ' + commentsMap.getRoot().toString())
+      console.log('totalNumberOfComments: ' + commentsContext.totalNumberOfComments);
+      console.log('usersCommentsCountersMap: ' + usersCommentsCountersMap.getRoot().toString());
+      console.log('targetsCommentsCountersMap: ' + targetsCommentsCountersMap.getRoot().toString());
+      console.log('commentsMap: ' + commentsMap.getRoot().toString());
 
       await prisma.comments.update({
         where: {
@@ -855,7 +854,7 @@ server.post<{Body: SignedData}>('/reposts', async (request) => {
 
 // ============================================================================
 
-server.post<{Body: SignedPostDeletion}>('/posts/delete', async (request) => {
+server.patch<{Body: SignedPostDeletion}>('/posts/delete', async (request) => {
 
   const signature = Signature.fromBase58(request.body.signedData.signature);
   const posterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
@@ -915,7 +914,7 @@ server.post<{Body: SignedPostDeletion}>('/posts/delete', async (request) => {
 
 // ============================================================================
 
-server.post<{Body: SignedCommentDeletion}>('/comments/delete', async (request) => {
+server.patch<{Body: SignedCommentDeletion}>('/comments/delete', async (request) => {
 
   const signature = Signature.fromBase58(request.body.signedData.signature);
   const commenterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
@@ -979,7 +978,7 @@ server.post<{Body: SignedCommentDeletion}>('/comments/delete', async (request) =
 
 // ============================================================================
 
-server.post<{Body: SignedReactionDeletion}>('/reactions/delete', async (request) => {
+server.patch<{Body: SignedReactionDeletion}>('/reactions/delete', async (request) => {
 
   const signature = Signature.fromBase58(request.body.signedData.signature);
   const reactorAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
@@ -1060,7 +1059,7 @@ server.post<{Body: SignedReactionDeletion}>('/reactions/delete', async (request)
 
 // ============================================================================
 
-server.post<{Body: SignedRepostDeletion}>('/reposts/delete', async (request) => {
+server.patch<{Body: SignedRepostDeletion}>('/reposts/delete', async (request) => {
 
   const signature = Signature.fromBase58(request.body.signedData.signature);
   const reposterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
@@ -1138,7 +1137,7 @@ server.post<{Body: SignedRepostDeletion}>('/reposts/delete', async (request) => 
 
 // ============================================================================
 
-server.post<{Body: SignedPostRestoration}>('/posts/restore', async (request) => {
+server.patch<{Body: SignedPostRestoration}>('/posts/restore', async (request) => {
 
   const signature = Signature.fromBase58(request.body.signedData.signature);
   const posterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
@@ -1198,7 +1197,7 @@ server.post<{Body: SignedPostRestoration}>('/posts/restore', async (request) => 
 
 // ============================================================================
 
-server.post<{Body: SignedCommentRestoration}>('/comments/restore', async (request) => {
+server.patch<{Body: SignedCommentRestoration}>('/comments/restore', async (request) => {
 
   const signature = Signature.fromBase58(request.body.signedData.signature);
   const commenterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
@@ -1258,7 +1257,7 @@ server.post<{Body: SignedCommentRestoration}>('/comments/restore', async (reques
 
 // ============================================================================
 
-server.post<{Body: SignedRepostRestoration}>('/reposts/restore', async (request) => {
+server.patch<{Body: SignedRepostRestoration}>('/reposts/restore', async (request) => {
 
   const signature = Signature.fromBase58(request.body.signedData.signature);
   const reposterAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
@@ -1333,7 +1332,7 @@ server.post<{Body: SignedRepostRestoration}>('/reposts/restore', async (request)
 
 // ============================================================================
 
-server.post<{Body: SignedReactionRestoration}>('/reactions/restore', async (request) => {
+server.patch<{Body: SignedReactionRestoration}>('/reactions/restore', async (request) => {
 
   const signature = Signature.fromBase58(request.body.signedData.signature);
   const reactorAddress = PublicKey.fromBase58(request.body.signedData.publicKey);
