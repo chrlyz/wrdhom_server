@@ -38,24 +38,8 @@ model posts {
   pendingSignature       String?
 }
 
-model reactionDeletions {
-  targetKey              String
-  allDeletionsCounter    BigInt @id
-  targetDeletionsCounter BigInt
-  deletionBlockHeight    BigInt
-  deletionSignature      String
-}
-
-model reactionRestorations {
-  targetKey                 String
-  allRestorationsCounter    BigInt @id
-  targetRestorationsCounter BigInt
-  restorationBlockHeight    BigInt
-  restorationSignature      String
-}
-
 model reactions {
-  reactionKey            String  @id
+  reactionKey            String       @id
   isTargetPost           Boolean
   targetKey              String
   reactorAddress         String
@@ -66,7 +50,9 @@ model reactions {
   reactionBlockHeight    BigInt
   deletionBlockHeight    BigInt
   restorationBlockHeight BigInt
-  reactionSignature      String
+  status                 status_enum?
+  pendingBlockHeight     BigInt?
+  pendingSignature       String?
 }
 
 model repostDeletions {

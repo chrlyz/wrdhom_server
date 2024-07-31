@@ -81,12 +81,8 @@ export async function regenerateReactionsZkAppState(context: {
       }
     }
   });
-  console.log('reactions:');
-  console.log(reactions)
   
   const reactors = new Set(reactions.map( reaction => reaction.reactorAddress));
-  console.log('reactors:');
-  console.log(reactors);
   
   for (const reactor of reactors) {
     const userReactions = await context.prisma.reactions.findMany({
@@ -97,18 +93,13 @@ export async function regenerateReactionsZkAppState(context: {
         }
       }
     });
-    console.log('Initial usersReactionsCountersMap root: ' + context.usersReactionsCountersMap.getRoot().toString());
     context.usersReactionsCountersMap.set(
       Poseidon.hash(PublicKey.fromBase58(reactor).toFields()),
       Field(userReactions.length)
     );
-    console.log(userReactions.length);
-    console.log('Latest usersReactionsCountersMap root: ' + context.usersReactionsCountersMap.getRoot().toString());
   };
 
   const targets = new Set(reactions.map( reaction => reaction.targetKey));
-  console.log('targets');
-  console.log(targets);
 
   for (const target of targets) {
     const targetReactions = await context.prisma.reactions.findMany({
@@ -119,13 +110,10 @@ export async function regenerateReactionsZkAppState(context: {
         }
       }
     })
-    console.log('Initial targetsReactionsCountersMap root: ' + context.targetsReactionsCountersMap.getRoot().toString());
     context.targetsReactionsCountersMap.set(
       Field(target),
       Field(targetReactions.length)
     );
-    console.log(targetReactions.length);
-    console.log('Latest targetsReactionsCountersMap root: ' + context.targetsReactionsCountersMap.getRoot().toString());
   }
   
   reactions.forEach( reaction => {
@@ -146,16 +134,13 @@ export async function regenerateReactionsZkAppState(context: {
       deletionBlockHeight: Field(reaction.deletionBlockHeight),
       restorationBlockHeight: Field(reaction.restorationBlockHeight)
     });
-    console.log('Initial reactionsMap root: ' + context.reactionsMap.getRoot().toString());
     context.reactionsMap.set(
       Poseidon.hash([targetKey, reactorAddressAsField, reactionCodePointAsField]),
       reactionState.hash()
     );
-    console.log('Latest reactionsMap root: ' + context.reactionsMap.getRoot().toString());
   });
   
   context.totalNumberOfReactions = reactions.length;
-  console.log('Original number of reactions: ' + context.totalNumberOfReactions);
 
   return reactions;
 }
