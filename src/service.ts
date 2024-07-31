@@ -65,6 +65,11 @@ const reactionsContext = {
 
 await regenerateReactionsZkAppState(reactionsContext);
 
+console.log('totalNumberOfReactions: ' + reactionsContext.totalNumberOfReactions);
+console.log('usersReactionsCountersMap: ' + usersReactionsCountersMap.getRoot().toString());
+console.log('targetsReactionsCountersMap: ' + targetsReactionsCountersMap.getRoot().toString());
+console.log('reactionsMap: ' + reactionsMap.getRoot().toString());
+
 const usersCommentsCountersMap = new MerkleMap();
 const targetsCommentsCountersMap =  new MerkleMap();
 const commentsMap = new MerkleMap();
@@ -118,26 +123,6 @@ const repostRestorations = await prisma.repostRestorations.findMany({
 let totalNumberOfRepostRestorations = repostRestorations.length;
 console.log('totalNumberOfRepostRestorations: ' + totalNumberOfRepostRestorations);
 
-const reactionDeletions = await prisma.reactionDeletions.findMany({
-  where: {
-    deletionBlockHeight: {
-      gt: 0
-    }
-  }
-});
-let totalNumberOfReactionDeletions = reactionDeletions.length;
-console.log('totalNumberOfReactionDeletions: ' + totalNumberOfReactionDeletions);
-
-const reactionRestorations = await prisma.reactionRestorations.findMany({
-  where: {
-    restorationBlockHeight: {
-      gt: 0
-    }
-  }
-});
-let totalNumberOfReactionRestorations = reactionRestorations.length;
-console.log('totalNumberOfReactionRestorations: ' + totalNumberOfReactionRestorations);
-
 // Create posts and comments content directories if they don't exist 
 
 try {
@@ -178,6 +163,7 @@ await server.register(cors, {
 const syncStateTask = new AsyncTask(
   'Sync with zkApp state',
   async () => {
+
     const pendingPosts = await prisma.posts.findMany({
       orderBy: {
         allPostsCounter: 'asc'
@@ -230,14 +216,10 @@ const syncStateTask = new AsyncTask(
         allReactionsCounter: 'asc'
       },
       where: {
-        allReactionsCounter: {
-          gt: reactionsContext.totalNumberOfReactions
-        },
-        reactionBlockHeight: {
-          not: 0
-        }
+        status: 'loading'
       }
     });
+
     for (const pReaction of pendingReactions) {
       const reactorAddress = PublicKey.fromBase58(pReaction.reactorAddress);
       const reactionCodePointAsField = Field(pReaction.reactionCodePoint);
@@ -258,16 +240,27 @@ const syncStateTask = new AsyncTask(
 
       reactionsMap.set(Field(pReaction.reactionKey), reactionState.hash());
 
-      const target = await prisma.posts.findUnique({
+      // Only update these values when the reaction is new
+      if (pReaction.allReactionsCounter > reactionsContext.totalNumberOfReactions) {
+        reactionsContext.totalNumberOfReactions += 1;
+        const reactorAddressAsField = Poseidon.hash(reactorAddress.toFields())
+        usersReactionsCountersMap.set(reactorAddressAsField, Field(pReaction.userReactionsCounter));
+        targetsReactionsCountersMap.set(Field(pReaction.targetKey), Field(pReaction.targetReactionsCounter));
+      }
+      
+      console.log('totalNumberOfReactions: ' + reactionsContext.totalNumberOfReactions);
+      console.log('usersReactionsCountersMap: ' + usersReactionsCountersMap.getRoot().toString());
+      console.log('targetsReactionsCountersMap: ' + targetsReactionsCountersMap.getRoot().toString());
+      console.log('reactionsMap: ' + reactionsMap.getRoot().toString());
+
+      await prisma.reactions.update({
         where: {
-          postKey: pReaction.targetKey
+          reactionKey: pReaction.reactionKey
+        },
+        data: {
+          status: 'loaded'
         }
       });
-      const targetPosterAddress = Poseidon.hash(PublicKey.fromBase58(target!.posterAddress).toFields())
-      usersReactionsCountersMap.set(targetPosterAddress, Field(pReaction.userReactionsCounter));
-      targetsReactionsCountersMap.set(Field(target!.postKey), Field(pReaction.targetReactionsCounter));
-
-      reactionsContext.totalNumberOfReactions += 1;
     }
 
     const pendingComments = await prisma.comments.findMany({
@@ -278,6 +271,7 @@ const syncStateTask = new AsyncTask(
         status: 'loading'
       }
     });
+
     for (const pComment of pendingComments) {
       const commenterAddress = PublicKey.fromBase58(pComment.commenterAddress);
       const commentContentIDAsCS = CircuitString.fromString(pComment.commentContentID);
@@ -434,80 +428,6 @@ const syncStateTask = new AsyncTask(
       const repostKey = Field(target!.repostKey);
       repostsMap.set(repostKey, repostState.hash());
       totalNumberOfRepostRestorations += 1;
-    }
-
-    const pendingReactionDeletions = await prisma.reactionDeletions.findMany({
-      where: {
-        allDeletionsCounter: {
-          gt: totalNumberOfReactionDeletions,
-        },
-        deletionBlockHeight: {
-          gt: 0
-        }
-      }
-    });
-
-    for (const pReactionDeletion of pendingReactionDeletions) {
-      const target = await prisma.reactions.findUnique({
-        where: {
-          reactionKey: pReactionDeletion.targetKey
-        }
-      });
-
-      console.log(pReactionDeletion);
-      const reactionState = new ReactionState({
-        isTargetPost: Bool(target!.isTargetPost),
-        targetKey: Field(target!.targetKey),
-        reactorAddress: PublicKey.fromBase58(target!.reactorAddress),
-        reactionCodePoint: Field(target!.reactionCodePoint),
-        allReactionsCounter: Field(target!.allReactionsCounter),
-        userReactionsCounter: Field(target!.userReactionsCounter),
-        targetReactionsCounter: Field(target!.targetReactionsCounter),
-        reactionBlockHeight: Field(target!.reactionBlockHeight),
-        deletionBlockHeight: Field(target!.deletionBlockHeight),
-        restorationBlockHeight: Field(target!.restorationBlockHeight)
-      });
-
-      const reactionKey = Field(target!.reactionKey);
-      reactionsMap.set(reactionKey, reactionState.hash());
-      totalNumberOfReactionDeletions += 1;
-    }
-
-    const pendingReactionRestorations = await prisma.reactionRestorations.findMany({
-      where: {
-        allRestorationsCounter: {
-          gt: totalNumberOfReactionRestorations,
-        },
-        restorationBlockHeight: {
-          gt: 0
-        }
-      }
-    });
-
-    for (const pReactionRestoration of pendingReactionRestorations) {
-      const target = await prisma.reactions.findUnique({
-        where: {
-          reactionKey: pReactionRestoration.targetKey
-        }
-      });
-
-      console.log(pReactionRestoration);
-      const reactionState = new ReactionState({
-        isTargetPost: Bool(target!.isTargetPost),
-        targetKey: Field(target!.targetKey),
-        reactorAddress: PublicKey.fromBase58(target!.reactorAddress),
-        reactionCodePoint: Field(target!.reactionCodePoint),
-        allReactionsCounter: Field(target!.allReactionsCounter),
-        userReactionsCounter: Field(target!.userReactionsCounter),
-        targetReactionsCounter: Field(target!.targetReactionsCounter),
-        reactionBlockHeight: Field(target!.reactionBlockHeight),
-        deletionBlockHeight: Field(target!.deletionBlockHeight),
-        restorationBlockHeight: Field(target!.restorationBlockHeight)
-      });
-
-      const reactionKey = Field(target!.reactionKey);
-      reactionsMap.set(reactionKey, reactionState.hash());
-      totalNumberOfReactionRestorations += 1;
     }
   },
   (e) => {console.error(e)}
@@ -996,15 +916,9 @@ server.patch<{Body: SignedReactionDeletion}>('/reactions/delete', async (request
   if (reaction !== null && reaction?.deletionBlockHeight !== 0n) {
     return 'Reaction is already deleted';
   }
-
-  const pendingDeletion = await prisma.reactionDeletions.findFirst({
-    where: {
-      targetKey: reactionKeyAsString
-    }
-  })
   
-  if (pendingDeletion !== null && pendingDeletion?.deletionBlockHeight === 0n) {
-    return 'Reaction deletion is already pending';
+  if (reaction !== null && reaction?.status !== 'loaded') {
+    return `Reaction is still being confirmed. Status: ${reaction?.status}`;
   }
 
   const reactionState = new ReactionState({
@@ -1029,25 +943,15 @@ server.patch<{Body: SignedReactionDeletion}>('/reactions/delete', async (request
 
   // Check that message to delete reaction is signed
   if (isSigned) {
-    console.log(reactionKey);
-    const allDeletionsCounter = (await prisma.reactionDeletions.count()) + 1;
-    console.log('allReactionDeletionsCounter: ' + allDeletionsCounter);
+    console.log('Deleting reaction with key: ' + reactionKeyAsString);
 
-    const deletionsForTarget = await prisma.reactionDeletions.findMany({
+    await prisma.reactions.update({
       where: {
-        targetKey: reactionKeyAsString
-      }
-    });
-    const targetDeletionsCounter = deletionsForTarget.length + 1;
-    console.log('targetReactionDeletionsCounter: ' + targetDeletionsCounter);
-
-    await prisma.reactionDeletions.create({
+        reactionKey: reactionKeyAsString
+      },
       data: {
-        targetKey: reactionKeyAsString,
-        allDeletionsCounter: allDeletionsCounter,
-        targetDeletionsCounter: targetDeletionsCounter,
-        deletionBlockHeight: 0,
-        deletionSignature: request.body.signedData.signature
+        status: 'delete',
+        pendingSignature: request.body.signedData.signature
       }
     });
 
@@ -1239,6 +1143,7 @@ server.patch<{Body: SignedCommentRestoration}>('/comments/restore', async (reque
   // Check that message to restore comment is signed
   if (isSigned) {
     console.log('Restoring comment with key: ' + request.body.commentKey);
+
     await prisma.comments.update({
       where: {
         commentKey: request.body.commentKey
@@ -1348,15 +1253,8 @@ server.patch<{Body: SignedReactionRestoration}>('/reactions/restore', async (req
     return 'Reaction has not been deleted, so it cannot be restored';
   }
 
-  const pendingRestoration = await prisma.reactionRestorations.findFirst({
-    where: {
-      targetKey: reactionKey
-    }
-  })
-
-  
-  if (pendingRestoration !== null && pendingRestoration?.restorationBlockHeight === 0n) {
-    return 'Reaction restoration is already pending';
+  if (reaction !== null && reaction?.status !== 'loaded') {
+    return `Reaction is still being confirmed. Status: ${reaction?.status}`;
   }
 
   const reactionState = new ReactionState({
@@ -1379,25 +1277,15 @@ server.patch<{Body: SignedReactionRestoration}>('/reactions/restore', async (req
 
   // Check that message to restore reaction is signed
   if (isSigned) {
-    console.log(request.body.reactionKey);
-    const allRestorationsCounter = (await prisma.reactionRestorations.count()) + 1;
-    console.log('allReactionsRestorationsCounter: ' + allRestorationsCounter);
+    console.log('Restoring reaction with key: ' + request.body.reactionKey);
 
-    const restorationsForTarget = await prisma.reactionRestorations.findMany({
+    await prisma.reactions.update({
       where: {
-        targetKey: request.body.reactionKey
-      }
-    });
-    const targetRestorationsCounter = restorationsForTarget.length + 1;
-    console.log('targetReactionsRestorationsCounter: ' + targetRestorationsCounter);
-
-    await prisma.reactionRestorations.create({
+        reactionKey: request.body.reactionKey
+      },
       data: {
-        targetKey: request.body.reactionKey,
-        allRestorationsCounter: allRestorationsCounter,
-        targetRestorationsCounter: targetRestorationsCounter,
-        restorationBlockHeight: 0,
-        restorationSignature: request.body.signedData.signature
+        status: 'restore',
+        pendingSignature: request.body.signedData.signature
       }
     });
 
@@ -2416,7 +2304,8 @@ const createSQLReaction = async (reactionKey: Field, targetKey: Field, reactorAd
       reactionBlockHeight: 0,
       deletionBlockHeight: 0,
       restorationBlockHeight: 0,
-      reactionSignature: signature
+      status: 'create',
+      pendingSignature: signature
     }
   });
 }

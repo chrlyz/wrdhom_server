@@ -217,7 +217,7 @@ while (true) {
   if (provingTurn === provingPosts) {
 
     let pendingPosts: PostsFindMany;
-    let provePostsInputs: ProvePostPublicationInputs[] = [];
+    let provePostPublicationsInputs: ProvePostPublicationInputs[] = [];
 
     // Get actions that may have a pending associated transaction
     pendingPosts = await prisma.posts.findMany({
@@ -255,7 +255,7 @@ while (true) {
           pPost.deletionBlockHeight,
           pPost.restorationBlockHeight
         );
-        provePostsInputs.push(result);
+        provePostPublicationsInputs.push(result);
       }
       
       try {
@@ -282,7 +282,7 @@ while (true) {
       const lastBlock = await fetchLastBlock(configPosts.url);
       const currentBlockHeight = lastBlock.blockchainLength.toBigint();
       console.log('Current blockheight for post publications: ' + currentBlockHeight);
-      provePostsInputs.length = 0;
+      provePostPublicationsInputs.length = 0;
       for (const pPost of pendingPosts) {
         const result = generateProvePostPublicationInputs(
           pPost.pendingSignature!,
@@ -294,7 +294,7 @@ while (true) {
           pPost.deletionBlockHeight,
           pPost.restorationBlockHeight
         );
-        provePostsInputs.push(result);
+        provePostPublicationsInputs.push(result);
         pPost.status = 'creating';
         await prisma.posts.update({
           where: {
@@ -308,10 +308,10 @@ while (true) {
       }
 
       const jobsPromises: Promise<any>[] = [];
-      for (const provePostInputs of provePostsInputs) {
+      for (const provePostPublicationInputs of provePostPublicationsInputs) {
         const job = await postsQueue.add(
           `job`,
-          { provePostInputs: provePostInputs }
+          { provePostPublicationInputs: provePostPublicationInputs }
         );
         jobsPromises.push(job.waitUntilFinished(postsQueueEvents));
       }
@@ -358,44 +358,34 @@ while (true) {
 
   } else if (provingTurn === provingReactions) {
 
-    const pendingReactions = await prisma.reactions.findMany({
+    let pendingReactions: ReactionsFindMany;
+    let proveReactionPublicationsInputs: ProveReactionPublicationInputs[] = [];
+
+    // Get actions that may have a pending associated transaction
+    pendingReactions = await prisma.reactions.findMany({
       take: Number(process.env.PARALLEL_NUMBER),
       orderBy: {
           allReactionsCounter: 'asc'
       },
       where: {
-          reactionBlockHeight: 0
+          status: 'creating'
       }
-      });
-      reactionsContext.totalNumberOfReactions += pendingReactions.length;
-      console.log('Number of reactions if update is successful: ' + reactionsContext.totalNumberOfReactions);
-      console.log('pendingReactions:');
-      console.log(pendingReactions);
-    
-      startTime = performance.now();
-    
-      const lastBlock = await fetchLastBlock(configReactions.url);
-      const reactionBlockHeight = lastBlock.blockchainLength.toBigint();
-      console.log(reactionBlockHeight);
+    });
 
-      const proveReactionInputs: {
-        transition: string,
-        signature: string,
-        targets: string,
-        postState: string,
-        targetWitness: string,
-        reactionState: string,
-        initialUsersReactionsCounters: string,
-        latestUsersReactionsCounters: string,
-        userReactionsCounterWitness: string,
-        initialTargetsReactionsCounters: string,
-        latestTargetsReactionsCounters: string,
-        targetReactionsCounterWitness: string,
-        initialReactions: string,
-        latestReactions: string,
-        reactionWitness: string
-      }[] = [];
-    
+    // If there isn't a pending transaction, process new actions
+    if (pendingReactions.length === 0) {
+      pendingReactions = await prisma.reactions.findMany({
+        take: Number(process.env.PARALLEL_NUMBER),
+        orderBy: {
+            allReactionsCounter: 'asc'
+        },
+        where: {
+            status: 'create'
+        }
+      });
+      // Handle possible pending transaction confirmation or failure
+    } else {
+      reactionsContext.totalNumberOfReactions += pendingReactions.length;
       for (const pReaction of pendingReactions) {
         const result = await generateProveReactionPublicationInputs(
           pReaction.isTargetPost,
@@ -405,155 +395,119 @@ while (true) {
           pReaction.allReactionsCounter,
           pReaction.userReactionsCounter,
           pReaction.targetReactionsCounter,
-          reactionBlockHeight,
+          pReaction.pendingBlockHeight!,
           pReaction.deletionBlockHeight,
           pReaction.restorationBlockHeight,
-          pReaction.reactionSignature
+          pReaction.pendingSignature!
         );
-    
-        proveReactionInputs.push(result);
+        proveReactionPublicationsInputs.push(result);
+      }
+      
+      try {
+        /* If a pending transaction was confirmed, syncing onchain and server state,
+          restart loop to process new actions
+        */
+        console.log('Syncing onchain and server state since last reaction publications:');
+        await assertReactionsOnchainAndServerState(pendingReactions, pendingReactions[0].pendingBlockHeight!);
+        continue;
+      } catch (error) {
+          /* If a pending transaction hasn't been successfully confirmed,
+            reset server state to process the pending actions with a new blockheight
+          */
+         if (error instanceof OnchainAndServerStateMismatchError) {
+          await resetServerReactionPublicationsState(pendingReactions);
+         } else {
+          throw error;
+         }
+      }
+    }
+
+    if (pendingReactions.length !== 0) {
+      reactionsContext.totalNumberOfReactions += pendingReactions.length;
+      const lastBlock = await fetchLastBlock(configReactions.url);
+      const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      console.log('Current blockheight for reaction publications: ' + currentBlockHeight);
+      proveReactionPublicationsInputs.length = 0;
+      for (const pReaction of pendingReactions) {
+        const result = await generateProveReactionPublicationInputs(
+          pReaction.isTargetPost,
+          pReaction.targetKey,
+          pReaction.reactorAddress,
+          pReaction.reactionCodePoint,
+          pReaction.allReactionsCounter,
+          pReaction.userReactionsCounter,
+          pReaction.targetReactionsCounter,
+          currentBlockHeight,
+          pReaction.deletionBlockHeight,
+          pReaction.restorationBlockHeight,
+          pReaction.pendingSignature!
+        );
+        proveReactionPublicationsInputs.push(result);
+        pReaction.status = 'creating';
+        await prisma.reactions.update({
+          where: {
+            reactionKey: pReaction.reactionKey
+          },
+          data: {
+            status: 'creating',
+            pendingBlockHeight: currentBlockHeight
+          }
+        });
       }
 
       const jobsPromises: Promise<any>[] = [];
-
-      for (const proveReactionInput of proveReactionInputs) {
+      for (const proveReactionPublicationInputs of proveReactionPublicationsInputs) {
         const job = await reactionsQueue.add(
           `job`,
-          { proveReactionInput: proveReactionInput }
+          { proveReactionPublicationInputs: proveReactionPublicationInputs }
         );
         jobsPromises.push(job.waitUntilFinished(reactionsQueueEvents));
       }
-  
+
+      startTime = performance.now();
       const transitionsAndProofsAsStrings: {
         transition: string;
         proof: string;
       }[] = await Promise.all(jobsPromises);
-    
       const transitionsAndProofs: {
         transition: ReactionsTransition,
         proof: ReactionsProof
       }[] = [];
-
       for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: ReactionsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
           proof: await ReactionsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
       }
-  
       endTime = performance.now();
-      console.log(`${(endTime - startTime)/1000/60} minutes`);
+      console.log(`Created ${pendingReactions.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
     
-      if (transitionsAndProofs.length !== 0) {
-        startTime = performance.now();
-        await updateReactionsOnChainState(transitionsAndProofs);
-        endTime = performance.now();
-        console.log(`${(endTime - startTime)/1000/60} minutes`);
-    
-        let tries = 0;
-        let allReactionsCounterFetch;
-        let userReactionsCounterFetch;
-        let targetReactionsCounterFetch;
-        let reactionsFetch;
-        while (tries < MAX_ATTEMPTS) {
-          console.log('Pause to wait for the transaction to confirm...');
-          await delay(20000);
-    
-          allReactionsCounterFetch = await reactionsContract.allReactionsCounter.fetch();
-          console.log('allReactionsCounterFetch: ' + allReactionsCounterFetch?.toString());
-          userReactionsCounterFetch = await reactionsContract.usersReactionsCounters.fetch();
-          console.log('userReactionsCounterFetch: ' + userReactionsCounterFetch?.toString());
-          targetReactionsCounterFetch = await reactionsContract.targetsReactionsCounters.fetch();
-          console.log('targetReactionsCounterFetch: ' + targetReactionsCounterFetch?.toString());
-          reactionsFetch = await reactionsContract.reactions.fetch();
-          console.log('reactionsFetch: ' + reactionsFetch?.toString());
-    
-          console.log(Field(reactionsContext.totalNumberOfReactions).toString());
-          console.log(usersReactionsCountersMap.getRoot().toString());
-          console.log(targetsReactionsCountersMap.getRoot().toString());
-          console.log(reactionsMap.getRoot().toString());
-    
-          console.log(allReactionsCounterFetch?.equals(Field(reactionsContext.totalNumberOfReactions)).toBoolean());
-          console.log(userReactionsCounterFetch?.equals(usersReactionsCountersMap.getRoot()).toBoolean());
-          console.log(targetReactionsCounterFetch?.equals(targetsReactionsCountersMap.getRoot()).toBoolean());
-          console.log(reactionsFetch?.equals(reactionsMap.getRoot()).toBoolean());
-    
-          if (allReactionsCounterFetch?.equals(Field(reactionsContext.totalNumberOfReactions)).toBoolean()
-          && userReactionsCounterFetch?.equals(usersReactionsCountersMap.getRoot()).toBoolean()
-          && targetReactionsCounterFetch?.equals(targetsReactionsCountersMap.getRoot()).toBoolean()
-          && reactionsFetch?.equals(reactionsMap.getRoot()).toBoolean()) {
-            for (const pReaction of pendingReactions) {
-              await prisma.reactions.update({
-                  where: {
-                    reactionKey: pReaction.reactionKey
-                  },
-                  data: {
-                    reactionBlockHeight: reactionBlockHeight
-                  }
-              });
-            }
-            tries = MAX_ATTEMPTS;
-          }
-          // Reset initial state if transaction appears to have failed
-          if (tries === MAX_ATTEMPTS - 1) {
-            reactionsContext.totalNumberOfReactions -= pendingReactions.length;
-            console.log('Original number of reactions: ' + reactionsContext.totalNumberOfReactions);
-    
-            const pendingReactors = new Set(pendingReactions.map( reaction => reaction.reactorAddress));
-            for (const reactor of pendingReactors) {
-              const userReactions = await prisma.reactions.findMany({
-                where: {
-                  reactorAddress: reactor,
-                  reactionBlockHeight: {
-                    not: 0
-                  }
-                }
-              });
-              console.log(userReactions);
-              console.log('Initial usersReactionsCountersMap root: ' + usersReactionsCountersMap.getRoot().toString());
-              usersReactionsCountersMap.set(
-                Poseidon.hash(PublicKey.fromBase58(reactor).toFields()),
-                Field(userReactions.length)
-              );
-              console.log(userReactions.length);
-              console.log('Latest usersReactionsCountersMap root: ' + usersReactionsCountersMap.getRoot().toString());
-            };
+      startTime = performance.now();
+      const pendingTransaction = await updateReactionsOnChainState(transitionsAndProofs);
+      endTime = performance.now();
+      console.log(`Merged ${pendingReactions.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
 
-            const pendingTargets = new Set(pendingReactions.map( reaction => reaction.targetKey));
-            for (const target of pendingTargets) {
-              const targetReactions = await prisma.reactions.findMany({
-                where: {
-                  targetKey: target,
-                  reactionBlockHeight: {
-                    not: 0
-                  }
-                }
-              })
-              console.log('Initial targetsReactionsCountersMap root: ' + targetsReactionsCountersMap.getRoot().toString());
-              targetsReactionsCountersMap.set(
-                Field(target),
-                Field(targetReactions.length)
-              );
-              console.log(targetReactions.length);
-              console.log('Latest targetsReactionsCountersMap root: ' + targetsReactionsCountersMap.getRoot().toString());
-            }
-
-            pendingReactions.forEach( pReaction => {
-              console.log('Initial reactionsMap root: ' + reactionsMap.getRoot().toString());
-              reactionsMap.set(
-                  Field(pReaction.reactionKey),
-                  Field(0)
-              );
-              console.log('Latest reactionsMap root: ' + reactionsMap.getRoot().toString());
-            });
-          }
-          tries++;
-        }
+      startTime = performance.now();
+      console.log('Confirming reaction publications transaction...');
+      let status = 'pending';
+      while (status === 'pending') {
+        status = await getTransactionStatus(pendingTransaction);
       }
+      endTime = performance.now();
+      console.log(`Waited ${(endTime - startTime)/1000/60} minutes for transaction confirmation or rejection`);
+
+      if (status === 'rejected') {
+        await resetServerReactionPublicationsState(pendingReactions);
+        continue;
+      }
+
+      await assertReactionsOnchainAndServerState(pendingReactions, currentBlockHeight);
+    }
+
   } else if (provingTurn === provingComments) {
 
     let pendingComments: CommentsFindMany;
-    let proveCommentsInputs: ProveCommentPublicationInputs[] = [];
+    let proveCommentPublicationsInputs: ProveCommentPublicationInputs[] = [];
 
     // Get actions that may have a pending associated transaction
     pendingComments = await prisma.comments.findMany({
@@ -594,7 +548,7 @@ while (true) {
           pComment.restorationBlockHeight,
           pComment.pendingSignature!
         );
-        proveCommentsInputs.push(result);
+        proveCommentPublicationsInputs.push(result);
       }
       
       try {
@@ -621,7 +575,7 @@ while (true) {
       const lastBlock = await fetchLastBlock(configComments.url);
       const currentBlockHeight = lastBlock.blockchainLength.toBigint();
       console.log('Current blockheight for comment publications: ' + currentBlockHeight);
-      proveCommentsInputs.length = 0;
+      proveCommentPublicationsInputs.length = 0;
       for (const pComment of pendingComments) {
         const result = await generateProveCommentPublicationInputs(
           pComment.isTargetPost,
@@ -636,7 +590,7 @@ while (true) {
           pComment.restorationBlockHeight,
           pComment.pendingSignature!
         );
-        proveCommentsInputs.push(result);
+        proveCommentPublicationsInputs.push(result);
         pComment.status = 'creating';
         await prisma.comments.update({
           where: {
@@ -650,10 +604,10 @@ while (true) {
       }
 
       const jobsPromises: Promise<any>[] = [];
-      for (const proveCommentInputs of proveCommentsInputs) {
+      for (const proveCommentPublicationInputs of proveCommentPublicationsInputs) {
         const job = await commentsQueue.add(
           `job`,
-          { proveCommentInputs: proveCommentInputs }
+          { proveCommentPublicationInputs: proveCommentPublicationInputs }
         );
         jobsPromises.push(job.waitUntilFinished(commentsQueueEvents));
       }
@@ -1910,407 +1864,336 @@ while (true) {
       }
   } else if (provingTurn === provingReactionDeletions) {
 
-    const pendingReactionDeletions = await prisma.reactionDeletions.findMany({
+    let pendingReactionDeletions: ReactionsFindMany;
+    let proveReactionDeletionsInputs: ProveReactionsUpdateInputs[] = [];
+
+    // Get actions that may have a pending associated transaction
+    pendingReactionDeletions = await prisma.reactions.findMany({
       take: Number(process.env.PARALLEL_NUMBER),
       orderBy: {
-          allDeletionsCounter: 'asc'
+          allReactionsCounter: 'asc'
       },
       where: {
-          deletionBlockHeight: 0
+          status: 'deleting'
       }
+    });
+
+    // If there isn't a pending transaction, process new actions
+    if (pendingReactionDeletions.length === 0) {
+      pendingReactionDeletions = await prisma.reactions.findMany({
+        take: Number(process.env.PARALLEL_NUMBER),
+        orderBy: {
+            allReactionsCounter: 'asc'
+        },
+        where: {
+            status: 'delete'
+        }
       });
-      console.log('pendingReactionDeletions:');
-      console.log(pendingReactionDeletions);
-    
-      startTime = performance.now();
-    
-      const lastBlock = await fetchLastBlock(configReactions.url);
-      const deletionBlockHeight = lastBlock.blockchainLength.toBigint();
-      console.log(deletionBlockHeight);
-
-      const currentAllReactionsCounter = await prisma.reactions.count();
-
-      const proveReactionDeletionInputs: {
-        transition: string,
-        signature: string,
-        targets: string,
-        postState: string,
-        targetWitness: string,
-        currentAllReactionsCounter: string,
-        usersReactionsCounters: string,
-        targetsReactionsCounters: string,
-        initialReactions: string,
-        latestReactions: string,
-        initialReactionState: string,
-        reactionWitness: string,
-        deletionBlockHeight: string
-      }[] = [];
-    
-      for (const pDeletion of pendingReactionDeletions) {
-
-        const reaction = await prisma.reactions.findUnique({
-          where: {
-            reactionKey: pDeletion.targetKey
-          }
-        });
-
+      // Handle possible pending transaction confirmation or failure
+    } else {
+      for (const pendingReactionDeletion of pendingReactionDeletions) {
         const parent = await prisma.posts.findUnique({
           where: {
-            postKey: reaction!.targetKey
+            postKey: pendingReactionDeletion.targetKey
           }
         });
 
         const result = generateProveReactionDeletionInputs(
           parent,
-          reaction!.isTargetPost,
-          reaction!.targetKey,
-          reaction!.reactorAddress,
-          reaction!.reactionCodePoint,
-          reaction!.allReactionsCounter,
-          reaction!.userReactionsCounter,
-          reaction!.targetReactionsCounter,
-          reaction!.reactionBlockHeight,
-          reaction!.restorationBlockHeight,
-          Field(reaction!.reactionKey),
-          pDeletion.deletionSignature,
-          Field(deletionBlockHeight),
-          Field(currentAllReactionsCounter)
+          pendingReactionDeletion.isTargetPost,
+          pendingReactionDeletion.targetKey,
+          pendingReactionDeletion.reactorAddress,
+          pendingReactionDeletion.reactionCodePoint,
+          pendingReactionDeletion.allReactionsCounter,
+          pendingReactionDeletion.userReactionsCounter,
+          pendingReactionDeletion.targetReactionsCounter,
+          pendingReactionDeletion.reactionBlockHeight,
+          pendingReactionDeletion.restorationBlockHeight,
+          Field(pendingReactionDeletion.reactionKey),
+          pendingReactionDeletion.pendingSignature!,
+          Field(pendingReactionDeletion.pendingBlockHeight!),
+          Field(reactionsContext.totalNumberOfReactions)
         );
-    
-        proveReactionDeletionInputs.push(result);
+        proveReactionDeletionsInputs.push(result);
+      }
+      
+      try {
+        /* If a pending transaction was confirmed, syncing onchain and server state,
+          restart loop to process new actions
+        */
+        console.log('Syncing onchain and server state since last reaction deletions:');
+        await assertReactionsOnchainAndServerState(pendingReactionDeletions, pendingReactionDeletions[0].pendingBlockHeight!);
+        continue;
+      } catch (error) {
+          /* If a pending transaction hasn't been successfully confirmed,
+            reset server state to process the pending actions with a new blockheight
+          */
+         if (error instanceof OnchainAndServerStateMismatchError) {
+          resetServerReactionUpdatesState(pendingReactionDeletions);
+         } else {
+          throw error;
+         }
+      }
+    }
+
+    if (pendingReactionDeletions.length !== 0) {
+      const lastBlock = await fetchLastBlock(configReactions.url);
+      const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      console.log('Current blockheight for reaction deletions: ' + currentBlockHeight);
+      proveReactionDeletionsInputs.length = 0;
+      for (const pendingReactionDeletion of pendingReactionDeletions) {
+        const parent = await prisma.posts.findUnique({
+          where: {
+            postKey: pendingReactionDeletion.targetKey
+          }
+        });
+
+        const result = generateProveReactionDeletionInputs(
+          parent,
+          pendingReactionDeletion.isTargetPost,
+          pendingReactionDeletion.targetKey,
+          pendingReactionDeletion.reactorAddress,
+          pendingReactionDeletion.reactionCodePoint,
+          pendingReactionDeletion.allReactionsCounter,
+          pendingReactionDeletion.userReactionsCounter,
+          pendingReactionDeletion.targetReactionsCounter,
+          pendingReactionDeletion.reactionBlockHeight,
+          pendingReactionDeletion.restorationBlockHeight,
+          Field(pendingReactionDeletion.reactionKey),
+          pendingReactionDeletion.pendingSignature!,
+          Field(currentBlockHeight),
+          Field(reactionsContext.totalNumberOfReactions)
+        );
+        proveReactionDeletionsInputs.push(result);
+        pendingReactionDeletion.status = 'deleting';
+        await prisma.reactions.update({
+          where: {
+            reactionKey: pendingReactionDeletion.reactionKey
+          },
+          data: {
+            status: 'deleting',
+            pendingBlockHeight: currentBlockHeight
+          }
+        });
       }
 
       const jobsPromises: Promise<any>[] = [];
-
-      for (const proveReactionDeletionInput of proveReactionDeletionInputs) {
+      for (const proveReactionDeletionInputs of proveReactionDeletionsInputs) {
         const job = await reactionDeletionsQueue.add(
           `job`,
-          { proveReactionDeletionInput: proveReactionDeletionInput }
+          { proveReactionDeletionInputs: proveReactionDeletionInputs }
         );
         jobsPromises.push(job.waitUntilFinished(reactionDeletionsQueueEvents));
       }
-  
+
+      startTime = performance.now();
       const transitionsAndProofsAsStrings: {
         transition: string;
         proof: string;
       }[] = await Promise.all(jobsPromises);
-    
       const transitionsAndProofs: {
         transition: ReactionsTransition,
         proof: ReactionsProof
       }[] = [];
-
       for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: ReactionsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
           proof: await ReactionsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
       }
-  
       endTime = performance.now();
-      console.log(`${(endTime - startTime)/1000/60} minutes`);
-
-      if (transitionsAndProofs.length !== 0) {
-        startTime = performance.now();
-        await updateReactionsOnChainState(transitionsAndProofs);
-        endTime = performance.now();
-        console.log(`${(endTime - startTime)/1000/60} minutes`);
-    
-        let tries = 0;
-        let allReactionsCounterFetch;
-        let usersReactionsCountersFetch;
-        let targetsReactionsCountersFetch;
-        let reactionsFetch;
-        while (tries < MAX_ATTEMPTS) {
-          console.log('Pause to wait for the transaction to confirm...');
-          await delay(20000);
-    
-          allReactionsCounterFetch = await reactionsContract.allReactionsCounter.fetch();
-          console.log('allReactionsCounterFetch: ' + allReactionsCounterFetch?.toString());
-          usersReactionsCountersFetch = await reactionsContract.usersReactionsCounters.fetch();
-          console.log('usersReactionsCountersFetch: ' + usersReactionsCountersFetch?.toString());
-          targetsReactionsCountersFetch = await reactionsContract.targetsReactionsCounters.fetch();
-          console.log('targetsReactionsCountersFetch: ' + targetsReactionsCountersFetch?.toString());
-          reactionsFetch = await reactionsContract.reactions.fetch();
-          console.log('reactionsFetch: ' + reactionsFetch?.toString());
-    
-          console.log(Field(reactionsContext.totalNumberOfReactions).toString());
-          console.log(usersReactionsCountersMap.getRoot().toString());
-          console.log(targetsReactionsCountersMap.getRoot().toString());
-          console.log(reactionsMap.getRoot().toString());
-    
-          console.log(allReactionsCounterFetch?.equals(Field(reactionsContext.totalNumberOfReactions)).toBoolean());
-          console.log(usersReactionsCountersFetch?.equals(usersReactionsCountersMap.getRoot()).toBoolean());
-          console.log(targetsReactionsCountersFetch?.equals(targetsReactionsCountersMap.getRoot()).toBoolean());
-          console.log(reactionsFetch?.equals(reactionsMap.getRoot()).toBoolean());
-    
-          if (allReactionsCounterFetch?.equals(Field(reactionsContext.totalNumberOfReactions)).toBoolean()
-          && usersReactionsCountersFetch?.equals(usersReactionsCountersMap.getRoot()).toBoolean()
-          && targetsReactionsCountersFetch?.equals(targetsReactionsCountersMap.getRoot()).toBoolean()
-          && reactionsFetch?.equals(reactionsMap.getRoot()).toBoolean()) {
-            for (const pDeletion of pendingReactionDeletions) {
-              await prisma.reactions.update({
-                  where: {
-                    reactionKey: pDeletion.targetKey
-                  },
-                  data: {
-                    deletionBlockHeight: deletionBlockHeight
-                  }
-              });
-
-              await prisma.reactionDeletions.update({
-                where: {
-                  allDeletionsCounter: pDeletion.allDeletionsCounter
-                },
-                data: {
-                  deletionBlockHeight: deletionBlockHeight
-                }
-              });
-            }
-            tries = MAX_ATTEMPTS;
-          }
-          // Reset initial state if transaction appears to have failed
-          if (tries === MAX_ATTEMPTS - 1) {
-
-            for (const pDeletion of pendingReactionDeletions) {
-
-              const target = await prisma.reactions.findUnique({
-                where: {
-                  reactionKey: pDeletion.targetKey
-                }
-              });
-
-              const reactorAddress = PublicKey.fromBase58(target!.reactorAddress);
-              const reactorAddressAsField = Poseidon.hash(reactorAddress.toFields());
-              const reactionCodePointAsField = Field(target!.reactionCodePoint);
-        
-              const restoredTargetState = new ReactionState({
-                isTargetPost: Bool(target!.isTargetPost),
-                targetKey: Field(target!.targetKey),
-                reactorAddress: reactorAddress,
-                reactionCodePoint: reactionCodePointAsField,
-                allReactionsCounter: Field(target!.allReactionsCounter),
-                userReactionsCounter: Field(target!.userReactionsCounter),
-                reactionBlockHeight: Field(target!.reactionBlockHeight),
-                targetReactionsCounter: Field(target!.targetReactionsCounter),
-                deletionBlockHeight: Field(target!.deletionBlockHeight),
-                restorationBlockHeight: Field(target!.restorationBlockHeight)
-              });
-
-              console.log('Initial reactionsMap root: ' + reactionsMap.getRoot().toString());
-              reactionsMap.set(
-                  Poseidon.hash([Field(target!.targetKey), reactorAddressAsField, reactionCodePointAsField]),
-                  restoredTargetState.hash()
-              );
-              console.log('Latest reactionsMap root: ' + reactionsMap.getRoot().toString());
-            }
-          }
-          tries++;
-        }
-      }
-  } else if (provingTurn === provingReactionRestorations) {
-
-    const pendingReactionRestorations = await prisma.reactionRestorations.findMany({
-      take: Number(process.env.PARALLEL_NUMBER),
-      orderBy: {
-          allRestorationsCounter: 'asc'
-      },
-      where: {
-          restorationBlockHeight: 0
-      }
-      });
-      console.log('pendingReactionRestorations:');
-      console.log(pendingReactionRestorations);
+      console.log(`Created ${pendingReactionDeletions.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
     
       startTime = performance.now();
+      const pendingTransaction = await updateReactionsOnChainState(transitionsAndProofs);
+      endTime = performance.now();
+      console.log(`Merged ${pendingReactionDeletions.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
+
+      startTime = performance.now();
+      console.log('Confirming reaction deletions transaction...');
+      let status = 'pending';
+      while (status === 'pending') {
+        status = await getTransactionStatus(pendingTransaction);
+      }
+      endTime = performance.now();
+      console.log(`Waited ${(endTime - startTime)/1000/60} minutes for transaction confirmation or rejection`);
+
+      if (status === 'rejected') {
+        resetServerReactionUpdatesState(pendingReactionDeletions);
+        continue;
+      }
+
+      await assertReactionsOnchainAndServerState(pendingReactionDeletions, currentBlockHeight);
+    }
     
-      const lastBlock = await fetchLastBlock(configReactions.url);
-      const restorationBlockHeight = lastBlock.blockchainLength.toBigint();
-      console.log(restorationBlockHeight);
+  } else if (provingTurn === provingReactionRestorations) {
 
-      const currentAllReactionsCounter = await prisma.reactions.count();
+    let pendingReactionRestorations: ReactionsFindMany;
+    let proveReactionRestorationsInputs: ProveReactionsUpdateInputs[] = [];
 
-      const proveReactionRestorationInputs: {
-        transition: string,
-        signature: string,
-        targets: string,
-        postState: string,
-        targetWitness: string,
-        currentAllReactionsCounter: string,
-        usersReactionsCounters: string,
-        targetsReactionsCounters: string,
-        initialReactions: string,
-        latestReactions: string,
-        initialReactionState: string,
-        reactionWitness: string,
-        restorationBlockHeight: string
-      }[] = [];
-    
-      for (const pRestoration of pendingReactionRestorations) {
+    // Get actions that may have a pending associated transaction
+    pendingReactionRestorations = await prisma.reactions.findMany({
+      take: Number(process.env.PARALLEL_NUMBER),
+      orderBy: {
+          allReactionsCounter: 'asc'
+      },
+      where: {
+          status: 'restoring'
+      }
+    });
 
-        const reaction = await prisma.reactions.findUnique({
-          where: {
-            reactionKey: pRestoration.targetKey
-          }
-        });
-
+    // If there isn't a pending transaction, process new actions
+    if (pendingReactionRestorations.length === 0) {
+      pendingReactionRestorations = await prisma.reactions.findMany({
+        take: Number(process.env.PARALLEL_NUMBER),
+        orderBy: {
+            allReactionsCounter: 'asc'
+        },
+        where: {
+            status: 'restore'
+        }
+      });
+      // Handle possible pending transaction confirmation or failure
+    } else {
+      for (const pendingReactionRestoration of pendingReactionRestorations) {
         const parent = await prisma.posts.findUnique({
           where: {
-            postKey: reaction!.targetKey
+            postKey: pendingReactionRestoration.targetKey
           }
         });
 
         const result = generateProveReactionRestorationInputs(
           parent,
-          reaction!.isTargetPost,
-          reaction!.targetKey,
-          reaction!.reactorAddress,
-          reaction!.reactionCodePoint,
-          reaction!.allReactionsCounter,
-          reaction!.userReactionsCounter,
-          reaction!.targetReactionsCounter,
-          reaction!.reactionBlockHeight,
-          reaction!.deletionBlockHeight,
-          reaction!.restorationBlockHeight,
-          Field(reaction!.reactionKey),
-          pRestoration.restorationSignature,
-          Field(restorationBlockHeight),
-          Field(currentAllReactionsCounter)
+          pendingReactionRestoration.isTargetPost,
+          pendingReactionRestoration.targetKey,
+          pendingReactionRestoration.reactorAddress,
+          pendingReactionRestoration.reactionCodePoint,
+          pendingReactionRestoration.allReactionsCounter,
+          pendingReactionRestoration.userReactionsCounter,
+          pendingReactionRestoration.targetReactionsCounter,
+          pendingReactionRestoration.reactionBlockHeight,
+          pendingReactionRestoration.deletionBlockHeight,
+          pendingReactionRestoration.restorationBlockHeight,
+          Field(pendingReactionRestoration.reactionKey),
+          pendingReactionRestoration.pendingSignature!,
+          Field(pendingReactionRestoration.pendingBlockHeight!),
+          Field(reactionsContext.totalNumberOfReactions)
         );
-    
-        proveReactionRestorationInputs.push(result);
+        proveReactionRestorationsInputs.push(result);
+      }
+      
+      try {
+        /* If a pending transaction was confirmed, syncing onchain and server state,
+          restart loop to process new actions
+        */
+        console.log('Syncing onchain and server state since last reaction restorations:');
+        await assertReactionsOnchainAndServerState(pendingReactionRestorations, pendingReactionRestorations[0].pendingBlockHeight!);
+        continue;
+      } catch (error) {
+          /* If a pending transaction hasn't been successfully confirmed,
+            reset server state to process the pending actions with a new blockheight
+          */
+        if (error instanceof OnchainAndServerStateMismatchError) {
+          resetServerReactionUpdatesState(pendingReactionRestorations);
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    if (pendingReactionRestorations.length !== 0) {
+      const lastBlock = await fetchLastBlock(configReactions.url);
+      const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      console.log('Current blockheight for reaction restorations: ' + currentBlockHeight);
+      proveReactionRestorationsInputs.length = 0;
+      for (const pendingReactionRestoration of pendingReactionRestorations) {
+        const parent = await prisma.posts.findUnique({
+          where: {
+            postKey: pendingReactionRestoration.targetKey
+          }
+        });
+
+        const result = generateProveReactionRestorationInputs(
+          parent,
+          pendingReactionRestoration.isTargetPost,
+          pendingReactionRestoration.targetKey,
+          pendingReactionRestoration.reactorAddress,
+          pendingReactionRestoration.reactionCodePoint,
+          pendingReactionRestoration.allReactionsCounter,
+          pendingReactionRestoration.userReactionsCounter,
+          pendingReactionRestoration.targetReactionsCounter,
+          pendingReactionRestoration.reactionBlockHeight,
+          pendingReactionRestoration.deletionBlockHeight,
+          pendingReactionRestoration.restorationBlockHeight,
+          Field(pendingReactionRestoration.reactionKey),
+          pendingReactionRestoration.pendingSignature!,
+          Field(currentBlockHeight),
+          Field(reactionsContext.totalNumberOfReactions)
+        );
+        proveReactionRestorationsInputs.push(result);
+        pendingReactionRestoration.status = 'restoring';
+        await prisma.reactions.update({
+          where: {
+            reactionKey: pendingReactionRestoration.reactionKey
+          },
+          data: {
+            status: 'restoring',
+            pendingBlockHeight: currentBlockHeight
+          }
+        });
       }
 
       const jobsPromises: Promise<any>[] = [];
-
-      for (const proveReactionRestorationInput of proveReactionRestorationInputs) {
+      for (const proveReactionRestorationInputs of proveReactionRestorationsInputs) {
         const job = await reactionRestorationsQueue.add(
           `job`,
-          { proveReactionRestorationInput: proveReactionRestorationInput }
+          { proveReactionRestorationInputs: proveReactionRestorationInputs }
         );
         jobsPromises.push(job.waitUntilFinished(reactionRestorationsQueueEvents));
       }
-  
+
+      startTime = performance.now();
       const transitionsAndProofsAsStrings: {
         transition: string;
         proof: string;
       }[] = await Promise.all(jobsPromises);
-    
       const transitionsAndProofs: {
         transition: ReactionsTransition,
         proof: ReactionsProof
       }[] = [];
-
       for (const transitionAndProof of transitionsAndProofsAsStrings) {
         transitionsAndProofs.push({
           transition: ReactionsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
           proof: await ReactionsProof.fromJSON(JSON.parse(transitionAndProof.proof))
         });
       }
-  
       endTime = performance.now();
-      console.log(`${(endTime - startTime)/1000/60} minutes`);
+      console.log(`Created ${pendingReactionRestorations.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
 
-      if (transitionsAndProofs.length !== 0) {
-        startTime = performance.now();
-        await updateReactionsOnChainState(transitionsAndProofs);
-        endTime = performance.now();
-        console.log(`${(endTime - startTime)/1000/60} minutes`);
-    
-        let tries = 0;
-        let allReactionsCounterFetch;
-        let usersReactionsCountersFetch;
-        let targetsReactionsCountersFetch;
-        let reactionsFetch;
-        while (tries < MAX_ATTEMPTS) {
-          console.log('Pause to wait for the transaction to confirm...');
-          await delay(20000);
-    
-          allReactionsCounterFetch = await reactionsContract.allReactionsCounter.fetch();
-          console.log('allReactionsCounterFetch: ' + allReactionsCounterFetch?.toString());
-          usersReactionsCountersFetch = await reactionsContract.usersReactionsCounters.fetch();
-          console.log('usersReactionsCountersFetch: ' + usersReactionsCountersFetch?.toString());
-          targetsReactionsCountersFetch = await reactionsContract.targetsReactionsCounters.fetch();
-          console.log('targetsReactionsCountersFetch: ' + targetsReactionsCountersFetch?.toString());
-          reactionsFetch = await reactionsContract.reactions.fetch();
-          console.log('reactionsFetch: ' + reactionsFetch?.toString());
-    
-          console.log(Field(reactionsContext.totalNumberOfReactions).toString());
-          console.log(usersReactionsCountersMap.getRoot().toString());
-          console.log(targetsReactionsCountersMap.getRoot().toString());
-          console.log(reactionsMap.getRoot().toString());
-    
-          console.log(allReactionsCounterFetch?.equals(Field(reactionsContext.totalNumberOfReactions)).toBoolean());
-          console.log(usersReactionsCountersFetch?.equals(usersReactionsCountersMap.getRoot()).toBoolean());
-          console.log(targetsReactionsCountersFetch?.equals(targetsReactionsCountersMap.getRoot()).toBoolean());
-          console.log(reactionsFetch?.equals(reactionsMap.getRoot()).toBoolean());
-    
-          if (allReactionsCounterFetch?.equals(Field(reactionsContext.totalNumberOfReactions)).toBoolean()
-          && usersReactionsCountersFetch?.equals(usersReactionsCountersMap.getRoot()).toBoolean()
-          && targetsReactionsCountersFetch?.equals(targetsReactionsCountersMap.getRoot()).toBoolean()
-          && reactionsFetch?.equals(reactionsMap.getRoot()).toBoolean()) {
-            for (const pRestoration of pendingReactionRestorations) {
-              await prisma.reactions.update({
-                  where: {
-                    reactionKey: pRestoration.targetKey
-                  },
-                  data: {
-                    deletionBlockHeight: 0,
-                    restorationBlockHeight: restorationBlockHeight
-                  }
-              });
+      startTime = performance.now();
+      const pendingTransaction = await updateReactionsOnChainState(transitionsAndProofs);
+      endTime = performance.now();
+      console.log(`Merged ${pendingReactionRestorations.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
 
-              await prisma.reactionRestorations.update({
-                where: {
-                  allRestorationsCounter: pRestoration.allRestorationsCounter
-                },
-                data: {
-                  restorationBlockHeight: restorationBlockHeight
-                }
-              });
-            }
-            tries = MAX_ATTEMPTS;
-          }
-          // Reset initial state if transaction appears to have failed
-          if (tries === MAX_ATTEMPTS - 1) {
-
-            for (const pRestoration of pendingReactionRestorations) {
-
-              const target = await prisma.reactions.findUnique({
-                where: {
-                  reactionKey: pRestoration.targetKey
-                }
-              });
-
-              const reactorAddress = PublicKey.fromBase58(target!.reactorAddress);
-              const reactorAddressAsField = Poseidon.hash(reactorAddress.toFields());
-              const reactionCodePointAsField = Field(target!.reactionCodePoint);
-        
-              const restoredTargetState = new ReactionState({
-                isTargetPost: Bool(target!.isTargetPost),
-                targetKey: Field(target!.targetKey),
-                reactorAddress: reactorAddress,
-                reactionCodePoint: reactionCodePointAsField,
-                allReactionsCounter: Field(target!.allReactionsCounter),
-                userReactionsCounter: Field(target!.userReactionsCounter),
-                reactionBlockHeight: Field(target!.reactionBlockHeight),
-                targetReactionsCounter: Field(target!.targetReactionsCounter),
-                deletionBlockHeight: Field(target!.deletionBlockHeight),
-                restorationBlockHeight: Field(target!.restorationBlockHeight)
-              });
-
-              console.log('Initial reactionsMap root: ' + reactionsMap.getRoot().toString());
-              reactionsMap.set(
-                  Poseidon.hash([Field(target!.targetKey), reactorAddressAsField, reactionCodePointAsField]),
-                  restoredTargetState.hash()
-              );
-              console.log('Latest reactionsMap root: ' + reactionsMap.getRoot().toString());
-            }
-          }
-          tries++;
-        }
+      startTime = performance.now();
+      console.log('Confirming reaction restorations transaction...');
+      let status = 'pending';
+      while (status === 'pending') {
+        status = await getTransactionStatus(pendingTransaction);
       }
+      endTime = performance.now();
+      console.log(`Waited ${(endTime - startTime)/1000/60} minutes for transaction confirmation or rejection`);
+
+      if (status === 'rejected') {
+        resetServerReactionUpdatesState(pendingReactionRestorations);
+        continue;
+      }
+
+      await assertReactionsOnchainAndServerState(pendingReactionRestorations, currentBlockHeight);
+    }
+
   }
+
   provingTurn++;
   if (provingTurn > provingReactionRestorations) {
     provingTurn = 0;
@@ -3524,7 +3407,7 @@ const reactionCodePointAsField = Field(reactionCodePoint);
       reactionWitness,
       deletionBlockHeight
     );
-    console.log('Transition created');
+    console.log('Reaction deletion transition created');
     
     return {
       transition: JSON.stringify(transition),
@@ -3539,7 +3422,7 @@ const reactionCodePointAsField = Field(reactionCodePoint);
       latestReactions: latestReactions.toString(),
       initialReactionState: JSON.stringify(initialReactionState),
       reactionWitness: JSON.stringify(reactionWitness.toJSON()),
-      deletionBlockHeight: deletionBlockHeight.toString()
+      blockHeight: deletionBlockHeight.toString()
     }
 }
 
@@ -3615,7 +3498,7 @@ const reactionCodePointAsField = Field(reactionCodePoint);
       reactionWitness,
       newRestorationBlockHeight
     );
-    console.log('Transition created');
+    console.log('Reaction restoration transition created');
 
     return {
       transition: JSON.stringify(transition),
@@ -3630,7 +3513,7 @@ const reactionCodePointAsField = Field(reactionCodePoint);
       latestReactions: latestReactions.toString(),
       initialReactionState: JSON.stringify(initialReactionState),
       reactionWitness: JSON.stringify(reactionWitness.toJSON()),
-      restorationBlockHeight: newRestorationBlockHeight.toString()
+      blockHeight: newRestorationBlockHeight.toString()
     }
 }
 
@@ -3672,6 +3555,24 @@ type ProveCommentPublicationInputs = {
   commentWitness: string
 }
 
+type ProveReactionPublicationInputs = {
+  transition: string,
+  signature: string,
+  targets: string,
+  postState: string,
+  targetWitness: string,
+  reactionState: string,
+  initialUsersReactionsCounters: string,
+  latestUsersReactionsCounters: string,
+  userReactionsCounterWitness: string,
+  initialTargetsReactionsCounters: string,
+  latestTargetsReactionsCounters: string,
+  targetReactionsCounterWitness: string,
+  initialReactions: string,
+  latestReactions: string,
+  reactionWitness: string
+}
+
 type ProvePostUpdateInputs = {
   transition: string,
   signature: string,
@@ -3700,10 +3601,27 @@ type ProveCommentsUpdateInputs = {
   blockHeight: string
 }
 
+type ProveReactionsUpdateInputs = {
+  transition: string,
+  signature: string,
+  targets: string,
+  postState: string,
+  targetWitness: string,
+  currentAllReactionsCounter: string,
+  usersReactionsCounters: string,
+  targetsReactionsCounters: string,
+  initialReactions: string,
+  latestReactions: string,
+  initialReactionState: string,
+  reactionWitness: string,
+  blockHeight: string
+}
+
 // ============================================================================
 
 type PostsFindMany = Prisma.PromiseReturnType<typeof prisma.posts.findMany>;
 type CommentsFindMany = Prisma.PromiseReturnType<typeof prisma.comments.findMany>;
+type ReactionsFindMany = Prisma.PromiseReturnType<typeof prisma.reactions.findMany>;
 
 type PostsFindUnique = Prisma.PromiseReturnType<typeof prisma.posts.findUnique>;
 
@@ -3849,6 +3767,79 @@ async function assertCommentsOnchainAndServerState(pendingComments: CommentsFind
 
 // ============================================================================
 
+async function assertReactionsOnchainAndServerState(pendingReactions: ReactionsFindMany, blockHeight: bigint) {
+
+  const allReactionsCounterFetch = await reactionsContract.allReactionsCounter.fetch();
+  console.log('allReactionsCounterFetch: ' + allReactionsCounterFetch!.toString());
+  const usersReactionsCountersFetch = await reactionsContract.usersReactionsCounters.fetch();
+  console.log('usersReactionsCountersFetch: ' + usersReactionsCountersFetch!.toString());
+  const targetsReactionsCountersFetch = await reactionsContract.targetsReactionsCounters.fetch();
+  console.log('targetsReactionsCountersFetch: ' + targetsReactionsCountersFetch!.toString());
+  const reactionsFetch = await reactionsContract.reactions.fetch();
+  console.log('reactionsFetch: ' + reactionsFetch!.toString());
+
+  const allReactionsCounterAfter = Field(reactionsContext.totalNumberOfReactions);
+  console.log('allReactionsCounterAfter: ' + allReactionsCounterAfter.toString());
+  const usersReactionsCountersAfter = usersReactionsCountersMap.getRoot();
+  console.log('usersReactionsCountersAfter: ' + usersReactionsCountersAfter.toString());
+  const targetsReactionsCountersAfter = targetsReactionsCountersMap.getRoot();
+  console.log('targetsReactionsCountersAfter: ' + targetsReactionsCountersAfter.toString());
+  const reactionsAfter = reactionsMap.getRoot();
+  console.log('reactionsAfter: ' + reactionsAfter.toString());
+
+  const allReactionsCounterEqual = allReactionsCounterFetch!.equals(allReactionsCounterAfter).toBoolean();
+  console.log('allReactionsCounterEqual: ' + allReactionsCounterEqual);
+  const usersReactionsCountersEqual = usersReactionsCountersFetch!.equals(usersReactionsCountersAfter).toBoolean();
+  console.log('usersReactionsCountersEqual: ' + usersReactionsCountersEqual);
+  const targetsReactionsCountersEqual = targetsReactionsCountersFetch!.equals(targetsReactionsCountersAfter).toBoolean();
+  console.log('targetsReactionsCountersEqual: ' + targetsReactionsCountersEqual);
+  const reactionsEqual = reactionsFetch!.equals(reactionsAfter).toBoolean();
+  console.log('reactionsEqual: ' + reactionsEqual);
+
+  const isUpdated = allReactionsCounterEqual && usersReactionsCountersEqual && targetsReactionsCountersEqual && reactionsEqual;
+
+  if (isUpdated) {
+    for (const pReaction of pendingReactions) {
+      if (pReaction.status === 'creating') {
+        await prisma.reactions.update({
+          where: {
+            reactionKey: pReaction.reactionKey
+          },
+          data: {
+            reactionBlockHeight: blockHeight,
+            status: 'loading'
+          }
+        });
+      } else if (pReaction.status === 'deleting') {
+        await prisma.reactions.update({
+          where: {
+            reactionKey: pReaction.reactionKey
+          },
+          data: {
+            deletionBlockHeight: blockHeight,
+            status: 'loading'
+          }
+        });
+      } else if (pReaction.status === 'restoring') {
+        await prisma.reactions.update({
+          where: {
+            reactionKey: pReaction.reactionKey
+          },
+          data: {
+            deletionBlockHeight: 0,
+            restorationBlockHeight: blockHeight,
+            status: 'loading'
+          }
+        });
+      }
+    }
+  } else {
+    throw new OnchainAndServerStateMismatchError('There is a mismatch between Reactions onchain and server state');
+  }
+}
+
+// ============================================================================
+
 async function resetServerPostPublicationsState(pendingPosts: PostsFindMany) {
   console.log('Current number of posts: ' + postsContext.totalNumberOfPosts);
   postsContext.totalNumberOfPosts -= pendingPosts.length;
@@ -3937,6 +3928,59 @@ async function resetServerCommentPublicationsState(pendingComments: CommentsFind
 
 // ============================================================================
 
+async function resetServerReactionPublicationsState(pendingReactions: ReactionsFindMany) {
+  console.log('Current number of reactions: ' + reactionsContext.totalNumberOfReactions);
+  reactionsContext.totalNumberOfReactions -= pendingReactions.length;
+  console.log('Restored number of reactions: ' + reactionsContext.totalNumberOfReactions);
+
+  const pendingReactioners = new Set(pendingReactions.map( reaction => reaction.reactorAddress));
+  for (const reactioner of pendingReactioners) {
+    const userReactions = await prisma.reactions.findMany({
+      where: { reactorAddress: reactioner,
+        reactionBlockHeight: {
+          not: 0
+        }
+      },
+      select: { userReactionsCounter: true }
+    });
+    console.log('Current usersReactionsCountersMap root: ' + usersReactionsCountersMap.getRoot().toString());
+    usersReactionsCountersMap.set(
+      Poseidon.hash(PublicKey.fromBase58(reactioner).toFields()),
+      Field(userReactions.length)
+    );
+    console.log('Restored usersReactionsCountersMap root: ' + usersReactionsCountersMap.getRoot().toString());
+  };
+
+  const pendingTargets = new Set(pendingReactions.map( reaction => reaction.targetKey));
+  for (const target of pendingTargets) {
+    const targetReactions = await prisma.reactions.findMany({
+      where: { targetKey: target,
+        reactionBlockHeight: {
+          not: 0
+        }
+      },
+      select: { targetReactionsCounter: true }
+    });
+    console.log('Current targetsReactionsCountersMap root: ' + targetsReactionsCountersMap.getRoot().toString());
+    targetsReactionsCountersMap.set(
+      Field(target),
+      Field(targetReactions.length)
+    );
+    console.log('Restored targetsReactionsCountersMap root: ' + targetsReactionsCountersMap.getRoot().toString());
+  };
+
+  pendingReactions.forEach( pReaction => {
+    console.log('Current reactionsMap root: ' + reactionsMap.getRoot().toString());
+    reactionsMap.set(
+        Field(pReaction.reactionKey),
+        Field(0)
+    );
+    console.log('Restored reactionsMap root: ' + reactionsMap.getRoot().toString());
+  });
+}
+
+// ============================================================================
+
 function resetServerPostUpdatesState(pendingPostUpdates: PostsFindMany) {
   for (const pendingPostUpdate of pendingPostUpdates) {
     const posterAddress = PublicKey.fromBase58(pendingPostUpdate.posterAddress);
@@ -3989,6 +4033,36 @@ function resetServerCommentUpdatesState(pendingCommentUpdates: CommentsFindMany)
       restoredCommentState.hash()
     );
     console.log('Restored commentsMap root: ' + commentsMap.getRoot().toString());
+  }
+}
+
+// ============================================================================
+
+function resetServerReactionUpdatesState(pendingReactionUpdates: ReactionsFindMany) {
+  for (const pendingReactionUpdate of pendingReactionUpdates) {
+    const reactorAddress = PublicKey.fromBase58(pendingReactionUpdate.reactorAddress);
+    const reactorAddressAsField = Poseidon.hash(reactorAddress.toFields());
+    const reactionCodePoint = Field(pendingReactionUpdate.reactionCodePoint);
+
+    const restoredReactionState = new ReactionState({
+      isTargetPost: Bool(pendingReactionUpdate.isTargetPost),
+      targetKey: Field(pendingReactionUpdate.targetKey),
+      reactorAddress: reactorAddress,
+      reactionCodePoint: reactionCodePoint,
+      allReactionsCounter: Field(pendingReactionUpdate.allReactionsCounter),
+      userReactionsCounter: Field(pendingReactionUpdate.userReactionsCounter),
+      reactionBlockHeight: Field(pendingReactionUpdate.reactionBlockHeight),
+      targetReactionsCounter: Field(pendingReactionUpdate.targetReactionsCounter),
+      deletionBlockHeight: Field(pendingReactionUpdate.deletionBlockHeight),
+      restorationBlockHeight: Field(pendingReactionUpdate.restorationBlockHeight)
+    });
+
+    console.log('Current reactionsMap root: ' + reactionsMap.getRoot().toString());
+    reactionsMap.set(
+      Poseidon.hash([Field(pendingReactionUpdate.targetKey), reactorAddressAsField, reactionCodePoint]),
+      restoredReactionState.hash()
+    );
+    console.log('Restored reactionsMap root: ' + reactionsMap.getRoot().toString());
   }
 }
 

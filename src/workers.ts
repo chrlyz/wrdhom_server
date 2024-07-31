@@ -31,15 +31,15 @@ console.log(`${(endTime - startTime)/1000/60} minutes`);
 
 new Worker('postsQueue', async job => {
 
-    const transition = PostsTransition.fromJSON(JSON.parse(job.data.provePostInputs.transition));
-    const signature = Signature.fromBase58(job.data.provePostInputs.signature);
-    const postState = PostState.fromJSON(JSON.parse(job.data.provePostInputs.postState)) as PostState;
-    const initialUsersPostsCounters = Field(job.data.provePostInputs.initialUsersPostsCounters);
-    const latestUsersPostsCounters = Field(job.data.provePostInputs.latestUsersPostsCounters);
-    const initialPosts = Field(job.data.provePostInputs.initialPosts);
-    const latestPosts = Field(job.data.provePostInputs.latestPosts);
-    const postWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.provePostInputs.postWitness));
-    const userPostsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.provePostInputs.userPostsCounterWitness));
+    const transition = PostsTransition.fromJSON(JSON.parse(job.data.provePostPublicationInputs.transition));
+    const signature = Signature.fromBase58(job.data.provePostPublicationInputs.signature);
+    const postState = PostState.fromJSON(JSON.parse(job.data.provePostPublicationInputs.postState)) as PostState;
+    const initialUsersPostsCounters = Field(job.data.provePostPublicationInputs.initialUsersPostsCounters);
+    const latestUsersPostsCounters = Field(job.data.provePostPublicationInputs.latestUsersPostsCounters);
+    const initialPosts = Field(job.data.provePostPublicationInputs.initialPosts);
+    const latestPosts = Field(job.data.provePostPublicationInputs.latestPosts);
+    const postWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.provePostPublicationInputs.postWitness));
+    const userPostsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.provePostPublicationInputs.userPostsCounterWitness));
     
     const proof = await Posts.provePostPublishingTransition(
       transition,
@@ -140,21 +140,21 @@ new Worker('postRestorationsQueue', async job => {
 
 new Worker('reactionsQueue', async job => {
 
-  const transition = ReactionsTransition.fromJSON(JSON.parse(job.data.proveReactionInput.transition));
-  const signature = Signature.fromBase58(job.data.proveReactionInput.signature);
-  const targets = Field(job.data.proveReactionInput.targets);
-  const postState = PostState.fromJSON(JSON.parse(job.data.proveReactionInput.postState)) as PostState;
-  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionInput.targetWitness));
-  const reactionState = ReactionState.fromJSON(JSON.parse(job.data.proveReactionInput.reactionState)) as ReactionState;
-  const initialUsersReactionsCounters = Field(job.data.proveReactionInput.initialUsersReactionsCounters);
-  const latestUsersReactionsCounters = Field(job.data.proveReactionInput.latestUsersReactionsCounters);
-  const userReactionsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionInput.userReactionsCounterWitness));
-  const initialTargetsReactionsCounters = Field(job.data.proveReactionInput.initialTargetsReactionsCounters);
-  const latestTargetsReactionsCounters = Field(job.data.proveReactionInput.latestTargetsReactionsCounters);
-  const targetReactionsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionInput.targetReactionsCounterWitness));
-  const initialReactions = Field(job.data.proveReactionInput.initialReactions);
-  const latestReactions = Field(job.data.proveReactionInput.latestReactions);
-  const reactionWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionInput.reactionWitness));
+  const transition = ReactionsTransition.fromJSON(JSON.parse(job.data.proveReactionPublicationInputs.transition));
+  const signature = Signature.fromBase58(job.data.proveReactionPublicationInputs.signature);
+  const targets = Field(job.data.proveReactionPublicationInputs.targets);
+  const postState = PostState.fromJSON(JSON.parse(job.data.proveReactionPublicationInputs.postState)) as PostState;
+  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionPublicationInputs.targetWitness));
+  const reactionState = ReactionState.fromJSON(JSON.parse(job.data.proveReactionPublicationInputs.reactionState)) as ReactionState;
+  const initialUsersReactionsCounters = Field(job.data.proveReactionPublicationInputs.initialUsersReactionsCounters);
+  const latestUsersReactionsCounters = Field(job.data.proveReactionPublicationInputs.latestUsersReactionsCounters);
+  const userReactionsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionPublicationInputs.userReactionsCounterWitness));
+  const initialTargetsReactionsCounters = Field(job.data.proveReactionPublicationInputs.initialTargetsReactionsCounters);
+  const latestTargetsReactionsCounters = Field(job.data.proveReactionPublicationInputs.latestTargetsReactionsCounters);
+  const targetReactionsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionPublicationInputs.targetReactionsCounterWitness));
+  const initialReactions = Field(job.data.proveReactionPublicationInputs.initialReactions);
+  const latestReactions = Field(job.data.proveReactionPublicationInputs.latestReactions);
+  const reactionWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionPublicationInputs.reactionWitness));
   
   const proof = await Reactions.proveReactionPublishingTransition(
     transition,
@@ -200,19 +200,19 @@ new Worker('mergingReactionsQueue', async job => {
 
 new Worker('reactionDeletionsQueue', async job => {
 
-  const transition = ReactionsTransition.fromJSON(JSON.parse(job.data.proveReactionDeletionInput.transition));
-  const signature = Signature.fromBase58(job.data.proveReactionDeletionInput.signature);
-  const targets = Field(job.data.proveReactionDeletionInput.targets);
-  const postState = PostState.fromJSON(JSON.parse(job.data.proveReactionDeletionInput.postState)) as PostState;
-  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionDeletionInput.targetWitness));
-  const currentAllReactionsCounter = Field(job.data.proveReactionDeletionInput.currentAllReactionsCounter);
-  const initialReactionState = ReactionState.fromJSON(JSON.parse(job.data.proveReactionDeletionInput.initialReactionState)) as ReactionState;
-  const usersReactionsCounters = Field(job.data.proveReactionDeletionInput.usersReactionsCounters);
-  const targetsReactionsCounters = Field(job.data.proveReactionDeletionInput.targetsReactionsCounters);
-  const initialReactions = Field(job.data.proveReactionDeletionInput.initialReactions);
-  const latestReactions = Field(job.data.proveReactionDeletionInput.latestReactions);
-  const reactionWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionDeletionInput.reactionWitness));
-  const deletionBlockHeight = Field(job.data.proveReactionDeletionInput.deletionBlockHeight);
+  const transition = ReactionsTransition.fromJSON(JSON.parse(job.data.proveReactionDeletionInputs.transition));
+  const signature = Signature.fromBase58(job.data.proveReactionDeletionInputs.signature);
+  const targets = Field(job.data.proveReactionDeletionInputs.targets);
+  const postState = PostState.fromJSON(JSON.parse(job.data.proveReactionDeletionInputs.postState)) as PostState;
+  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionDeletionInputs.targetWitness));
+  const currentAllReactionsCounter = Field(job.data.proveReactionDeletionInputs.currentAllReactionsCounter);
+  const initialReactionState = ReactionState.fromJSON(JSON.parse(job.data.proveReactionDeletionInputs.initialReactionState)) as ReactionState;
+  const usersReactionsCounters = Field(job.data.proveReactionDeletionInputs.usersReactionsCounters);
+  const targetsReactionsCounters = Field(job.data.proveReactionDeletionInputs.targetsReactionsCounters);
+  const initialReactions = Field(job.data.proveReactionDeletionInputs.initialReactions);
+  const latestReactions = Field(job.data.proveReactionDeletionInputs.latestReactions);
+  const reactionWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionDeletionInputs.reactionWitness));
+  const deletionBlockHeight = Field(job.data.proveReactionDeletionInputs.blockHeight);
   
   const proof = await Reactions.proveReactionDeletionTransition(
     transition,
@@ -239,19 +239,19 @@ new Worker('reactionDeletionsQueue', async job => {
 
 new Worker('reactionRestorationsQueue', async job => {
 
-  const transition = ReactionsTransition.fromJSON(JSON.parse(job.data.proveReactionRestorationInput.transition));
-  const signature = Signature.fromBase58(job.data.proveReactionRestorationInput.signature);
-  const targets = Field(job.data.proveReactionRestorationInput.targets);
-  const postState = PostState.fromJSON(JSON.parse(job.data.proveReactionRestorationInput.postState)) as PostState;
-  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionRestorationInput.targetWitness));
-  const currentAllReactionsCounter = Field(job.data.proveReactionRestorationInput.currentAllReactionsCounter);
-  const initialReactionState = ReactionState.fromJSON(JSON.parse(job.data.proveReactionRestorationInput.initialReactionState)) as ReactionState;
-  const usersReactionsCounters = Field(job.data.proveReactionRestorationInput.usersReactionsCounters);
-  const targetsReactionsCounters = Field(job.data.proveReactionRestorationInput.targetsReactionsCounters);
-  const initialReactions = Field(job.data.proveReactionRestorationInput.initialReactions);
-  const latestReactions = Field(job.data.proveReactionRestorationInput.latestReactions);
-  const reactionWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionRestorationInput.reactionWitness));
-  const restorationBlockHeight = Field(job.data.proveReactionRestorationInput.restorationBlockHeight);
+  const transition = ReactionsTransition.fromJSON(JSON.parse(job.data.proveReactionRestorationInputs.transition));
+  const signature = Signature.fromBase58(job.data.proveReactionRestorationInputs.signature);
+  const targets = Field(job.data.proveReactionRestorationInputs.targets);
+  const postState = PostState.fromJSON(JSON.parse(job.data.proveReactionRestorationInputs.postState)) as PostState;
+  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionRestorationInputs.targetWitness));
+  const currentAllReactionsCounter = Field(job.data.proveReactionRestorationInputs.currentAllReactionsCounter);
+  const initialReactionState = ReactionState.fromJSON(JSON.parse(job.data.proveReactionRestorationInputs.initialReactionState)) as ReactionState;
+  const usersReactionsCounters = Field(job.data.proveReactionRestorationInputs.usersReactionsCounters);
+  const targetsReactionsCounters = Field(job.data.proveReactionRestorationInputs.targetsReactionsCounters);
+  const initialReactions = Field(job.data.proveReactionRestorationInputs.initialReactions);
+  const latestReactions = Field(job.data.proveReactionRestorationInputs.latestReactions);
+  const reactionWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveReactionRestorationInputs.reactionWitness));
+  const restorationBlockHeight = Field(job.data.proveReactionRestorationInputs.blockHeight);
   
   const proof = await Reactions.proveReactionRestorationTransition(
     transition,
@@ -278,21 +278,21 @@ new Worker('reactionRestorationsQueue', async job => {
 
 new Worker('commentsQueue', async job => {
 
-  const transition = CommentsTransition.fromJSON(JSON.parse(job.data.proveCommentInputs.transition));
-  const signature = Signature.fromBase58(job.data.proveCommentInputs.signature);
-  const targets = Field(job.data.proveCommentInputs.targets);
-  const postState = PostState.fromJSON(JSON.parse(job.data.proveCommentInputs.postState)) as PostState;
-  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentInputs.targetWitness));
-  const commentState = CommentState.fromJSON(JSON.parse(job.data.proveCommentInputs.commentState)) as CommentState;
-  const initialUsersCommentsCounters = Field(job.data.proveCommentInputs.initialUsersCommentsCounters);
-  const latestUsersCommentsCounters = Field(job.data.proveCommentInputs.latestUsersCommentsCounters);
-  const userCommentsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentInputs.userCommentsCounterWitness));
-  const initialTargetsCommentsCounters = Field(job.data.proveCommentInputs.initialTargetsCommentsCounters);
-  const latestTargetsCommentsCounters = Field(job.data.proveCommentInputs.latestTargetsCommentsCounters);
-  const targetCommentsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentInputs.targetCommentsCounterWitness));
-  const initialComments = Field(job.data.proveCommentInputs.initialComments);
-  const latestComments = Field(job.data.proveCommentInputs.latestComments);
-  const commentWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentInputs.commentWitness));
+  const transition = CommentsTransition.fromJSON(JSON.parse(job.data.proveCommentPublicationInputs.transition));
+  const signature = Signature.fromBase58(job.data.proveCommentPublicationInputs.signature);
+  const targets = Field(job.data.proveCommentPublicationInputs.targets);
+  const postState = PostState.fromJSON(JSON.parse(job.data.proveCommentPublicationInputs.postState)) as PostState;
+  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentPublicationInputs.targetWitness));
+  const commentState = CommentState.fromJSON(JSON.parse(job.data.proveCommentPublicationInputs.commentState)) as CommentState;
+  const initialUsersCommentsCounters = Field(job.data.proveCommentPublicationInputs.initialUsersCommentsCounters);
+  const latestUsersCommentsCounters = Field(job.data.proveCommentPublicationInputs.latestUsersCommentsCounters);
+  const userCommentsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentPublicationInputs.userCommentsCounterWitness));
+  const initialTargetsCommentsCounters = Field(job.data.proveCommentPublicationInputs.initialTargetsCommentsCounters);
+  const latestTargetsCommentsCounters = Field(job.data.proveCommentPublicationInputs.latestTargetsCommentsCounters);
+  const targetCommentsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentPublicationInputs.targetCommentsCounterWitness));
+  const initialComments = Field(job.data.proveCommentPublicationInputs.initialComments);
+  const latestComments = Field(job.data.proveCommentPublicationInputs.latestComments);
+  const commentWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveCommentPublicationInputs.commentWitness));
 
   
   const proof = await Comments.proveCommentPublishingTransition(
