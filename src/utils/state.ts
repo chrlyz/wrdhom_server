@@ -250,12 +250,8 @@ export async function regenerateRepostsZkAppState(context: {
       }
     }
   });
-  console.log('reposts:');
-  console.log(reposts)
   
   const reposters = new Set(reposts.map( repost => repost.reposterAddress));
-  console.log('reposters:');
-  console.log(reposters);
   
   for (const reposter of reposters) {
     const userReposts = await context.prisma.reposts.findMany({
@@ -266,18 +262,13 @@ export async function regenerateRepostsZkAppState(context: {
         }
       }
     });
-    console.log('Initial usersRepostsCountersMap root: ' + context.usersRepostsCountersMap.getRoot().toString());
     context.usersRepostsCountersMap.set(
       Poseidon.hash(PublicKey.fromBase58(reposter).toFields()),
       Field(userReposts.length)
     );
-    console.log(userReposts.length);
-    console.log('Latest usersRepostsCountersMap root: ' + context.usersRepostsCountersMap.getRoot().toString());
   };
 
   const targets = new Set(reposts.map( repost => repost.targetKey));
-  console.log('targets');
-  console.log(targets);
 
   for (const target of targets) {
     const targetReposts = await context.prisma.reposts.findMany({
@@ -288,13 +279,10 @@ export async function regenerateRepostsZkAppState(context: {
         }
       }
     })
-    console.log('Initial targetsRepostsCountersMap root: ' + context.targetsRepostsCountersMap.getRoot().toString());
     context.targetsRepostsCountersMap.set(
       Field(target),
       Field(targetReposts.length)
     );
-    console.log(targetReposts.length);
-    console.log('Latest targetsRepostsCountersMap root: ' + context.targetsRepostsCountersMap.getRoot().toString());
   }
   
   reposts.forEach( repost => {
@@ -314,16 +302,13 @@ export async function regenerateRepostsZkAppState(context: {
       deletionBlockHeight: Field(repost.deletionBlockHeight),
       restorationBlockHeight: Field(repost.restorationBlockHeight)
     });
-    console.log('Initial repostsMap root: ' + context.repostsMap.getRoot().toString());
     context.repostsMap.set(
       repostKey,
       repostState.hash()
     );
-    console.log('Latest repostsMap root: ' + context.repostsMap.getRoot().toString());
   });
   
   context.totalNumberOfReposts = reposts.length;
-  console.log('Original number of reposts: ' + context.totalNumberOfReposts);
 
   return reposts;
 }

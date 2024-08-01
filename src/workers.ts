@@ -417,21 +417,21 @@ new Worker('commentRestorationsQueue', async job => {
 
 new Worker('repostsQueue', async job => {
 
-  const transition = RepostsTransition.fromJSON(JSON.parse(job.data.proveRepostInput.transition));
-  const signature = Signature.fromBase58(job.data.proveRepostInput.signature);
-  const targets = Field(job.data.proveRepostInput.targets);
-  const postState = PostState.fromJSON(JSON.parse(job.data.proveRepostInput.postState)) as PostState;
-  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostInput.targetWitness));
-  const repostState = RepostState.fromJSON(JSON.parse(job.data.proveRepostInput.repostState)) as RepostState;
-  const initialUsersRepostsCounters = Field(job.data.proveRepostInput.initialUsersRepostsCounters);
-  const latestUsersRepostsCounters = Field(job.data.proveRepostInput.latestUsersRepostsCounters);
-  const userRepostsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostInput.userRepostsCounterWitness));
-  const initialTargetsRepostsCounters = Field(job.data.proveRepostInput.initialTargetsRepostsCounters);
-  const latestTargetsRepostsCounters = Field(job.data.proveRepostInput.latestTargetsRepostsCounters);
-  const targetRepostsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostInput.targetRepostsCounterWitness));
-  const initialReposts = Field(job.data.proveRepostInput.initialReposts);
-  const latestReposts = Field(job.data.proveRepostInput.latestReposts);
-  const repostWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostInput.repostWitness));
+  const transition = RepostsTransition.fromJSON(JSON.parse(job.data.proveRepostPublicationInputs.transition));
+  const signature = Signature.fromBase58(job.data.proveRepostPublicationInputs.signature);
+  const targets = Field(job.data.proveRepostPublicationInputs.targets);
+  const postState = PostState.fromJSON(JSON.parse(job.data.proveRepostPublicationInputs.postState)) as PostState;
+  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostPublicationInputs.targetWitness));
+  const repostState = RepostState.fromJSON(JSON.parse(job.data.proveRepostPublicationInputs.repostState)) as RepostState;
+  const initialUsersRepostsCounters = Field(job.data.proveRepostPublicationInputs.initialUsersRepostsCounters);
+  const latestUsersRepostsCounters = Field(job.data.proveRepostPublicationInputs.latestUsersRepostsCounters);
+  const userRepostsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostPublicationInputs.userRepostsCounterWitness));
+  const initialTargetsRepostsCounters = Field(job.data.proveRepostPublicationInputs.initialTargetsRepostsCounters);
+  const latestTargetsRepostsCounters = Field(job.data.proveRepostPublicationInputs.latestTargetsRepostsCounters);
+  const targetRepostsCounterWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostPublicationInputs.targetRepostsCounterWitness));
+  const initialReposts = Field(job.data.proveRepostPublicationInputs.initialReposts);
+  const latestReposts = Field(job.data.proveRepostPublicationInputs.latestReposts);
+  const repostWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostPublicationInputs.repostWitness));
 
   
   const proof = await Reposts.proveRepostPublishingTransition(
@@ -478,19 +478,19 @@ new Worker('mergingRepostsQueue', async job => {
 
 new Worker('repostDeletionsQueue', async job => {
 
-  const transition = RepostsTransition.fromJSON(JSON.parse(job.data.proveRepostDeletionInput.transition));
-  const signature = Signature.fromBase58(job.data.proveRepostDeletionInput.signature);
-  const targets = Field(job.data.proveRepostDeletionInput.targets);
-  const postState = PostState.fromJSON(JSON.parse(job.data.proveRepostDeletionInput.postState)) as PostState;
-  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostDeletionInput.targetWitness));
-  const currentAllRepostsCounter = Field(job.data.proveRepostDeletionInput.currentAllRepostsCounter);
-  const initialRepostState = RepostState.fromJSON(JSON.parse(job.data.proveRepostDeletionInput.initialRepostState)) as RepostState;
-  const usersRepostsCounters = Field(job.data.proveRepostDeletionInput.usersRepostsCounters);
-  const targetsRepostsCounters = Field(job.data.proveRepostDeletionInput.targetsRepostsCounters);
-  const initialReposts = Field(job.data.proveRepostDeletionInput.initialReposts);
-  const latestReposts = Field(job.data.proveRepostDeletionInput.latestReposts);
-  const repostWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostDeletionInput.repostWitness));
-  const deletionBlockHeight = Field(job.data.proveRepostDeletionInput.deletionBlockHeight);
+  const transition = RepostsTransition.fromJSON(JSON.parse(job.data.proveRepostDeletionInputs.transition));
+  const signature = Signature.fromBase58(job.data.proveRepostDeletionInputs.signature);
+  const targets = Field(job.data.proveRepostDeletionInputs.targets);
+  const postState = PostState.fromJSON(JSON.parse(job.data.proveRepostDeletionInputs.postState)) as PostState;
+  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostDeletionInputs.targetWitness));
+  const currentAllRepostsCounter = Field(job.data.proveRepostDeletionInputs.currentAllRepostsCounter);
+  const initialRepostState = RepostState.fromJSON(JSON.parse(job.data.proveRepostDeletionInputs.initialRepostState)) as RepostState;
+  const usersRepostsCounters = Field(job.data.proveRepostDeletionInputs.usersRepostsCounters);
+  const targetsRepostsCounters = Field(job.data.proveRepostDeletionInputs.targetsRepostsCounters);
+  const initialReposts = Field(job.data.proveRepostDeletionInputs.initialReposts);
+  const latestReposts = Field(job.data.proveRepostDeletionInputs.latestReposts);
+  const repostWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostDeletionInputs.repostWitness));
+  const deletionBlockHeight = Field(job.data.proveRepostDeletionInputs.blockHeight);
   
   const proof = await Reposts.proveRepostDeletionTransition(
     transition,
@@ -517,19 +517,19 @@ new Worker('repostDeletionsQueue', async job => {
 
 new Worker('repostRestorationsQueue', async job => {
 
-  const transition = RepostsTransition.fromJSON(JSON.parse(job.data.proveRepostRestorationInput.transition));
-  const signature = Signature.fromBase58(job.data.proveRepostRestorationInput.signature);
-  const targets = Field(job.data.proveRepostRestorationInput.targets);
-  const postState = PostState.fromJSON(JSON.parse(job.data.proveRepostRestorationInput.postState)) as PostState;
-  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostRestorationInput.targetWitness));
-  const currentAllRepostsCounter = Field(job.data.proveRepostRestorationInput.currentAllRepostsCounter);
-  const initialRepostState = RepostState.fromJSON(JSON.parse(job.data.proveRepostRestorationInput.initialRepostState)) as RepostState;
-  const usersRepostsCounters = Field(job.data.proveRepostRestorationInput.usersRepostsCounters);
-  const targetsRepostsCounters = Field(job.data.proveRepostRestorationInput.targetsRepostsCounters);
-  const initialReposts = Field(job.data.proveRepostRestorationInput.initialReposts);
-  const latestReposts = Field(job.data.proveRepostRestorationInput.latestReposts);
-  const repostWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostRestorationInput.repostWitness));
-  const restorationBlockHeight = Field(job.data.proveRepostRestorationInput.restorationBlockHeight);
+  const transition = RepostsTransition.fromJSON(JSON.parse(job.data.proveRepostRestorationInputs.transition));
+  const signature = Signature.fromBase58(job.data.proveRepostRestorationInputs.signature);
+  const targets = Field(job.data.proveRepostRestorationInputs.targets);
+  const postState = PostState.fromJSON(JSON.parse(job.data.proveRepostRestorationInputs.postState)) as PostState;
+  const targetWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostRestorationInputs.targetWitness));
+  const currentAllRepostsCounter = Field(job.data.proveRepostRestorationInputs.currentAllRepostsCounter);
+  const initialRepostState = RepostState.fromJSON(JSON.parse(job.data.proveRepostRestorationInputs.initialRepostState)) as RepostState;
+  const usersRepostsCounters = Field(job.data.proveRepostRestorationInputs.usersRepostsCounters);
+  const targetsRepostsCounters = Field(job.data.proveRepostRestorationInputs.targetsRepostsCounters);
+  const initialReposts = Field(job.data.proveRepostRestorationInputs.initialReposts);
+  const latestReposts = Field(job.data.proveRepostRestorationInputs.latestReposts);
+  const repostWitness = MerkleMapWitness.fromJSON(JSON.parse(job.data.proveRepostRestorationInputs.repostWitness));
+  const restorationBlockHeight = Field(job.data.proveRepostRestorationInputs.blockHeight);
   
   const proof = await Reposts.proveRepostRestorationTransition(
     transition,

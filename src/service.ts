@@ -1,7 +1,7 @@
 import fastify from 'fastify';
 import { CircuitString, PublicKey, Signature, Field, MerkleMap, Poseidon, Bool } from 'o1js';
 import cors from '@fastify/cors';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { createFileEncoderStream, CAREncoderStream } from 'ipfs-car';
 import { Blob } from '@web-std/file';
 import * as dotenv from 'dotenv';
@@ -103,25 +103,10 @@ const repostsContext = {
 
 await regenerateRepostsZkAppState(repostsContext);
 
-const repostDeletions = await prisma.repostDeletions.findMany({
-  where: {
-    deletionBlockHeight: {
-      gt: 0
-    }
-  }
-});
-let totalNumberOfRepostDeletions = repostDeletions.length;
-console.log('totalNumberOfRepostDeletions: ' + totalNumberOfRepostDeletions);
-
-const repostRestorations = await prisma.repostRestorations.findMany({
-  where: {
-    restorationBlockHeight: {
-      gt: 0
-    }
-  }
-});
-let totalNumberOfRepostRestorations = repostRestorations.length;
-console.log('totalNumberOfRepostRestorations: ' + totalNumberOfRepostRestorations);
+console.log('totalNumberOfReposts: ' + repostsContext.totalNumberOfReposts);
+console.log('usersRepostsCountersMap: ' + usersRepostsCountersMap.getRoot().toString());
+console.log('targetsRepostsCountersMap: ' + targetsRepostsCountersMap.getRoot().toString());
+console.log('repostsMap: ' + repostsMap.getRoot().toString());
 
 // Create posts and comments content directories if they don't exist 
 
@@ -320,14 +305,10 @@ const syncStateTask = new AsyncTask(
         allRepostsCounter: 'asc'
       },
       where: {
-        allRepostsCounter: {
-          gt: repostsContext.totalNumberOfReposts
-        },
-        repostBlockHeight: {
-          not: 0
-        }
+        status: 'loading'
       }
     });
+
     for (const pRepost of pendingReposts) {
       const reposterAddress = PublicKey.fromBase58(pRepost.reposterAddress);
       
@@ -346,89 +327,29 @@ const syncStateTask = new AsyncTask(
     
       repostsMap.set(Field(pRepost.repostKey), repostState.hash());
 
-      const target = await prisma.posts.findUnique({
-        where: {
-          postKey: pRepost.targetKey
-        }
-      });
-      const targetPosterAddress = Poseidon.hash(PublicKey.fromBase58(target!.posterAddress).toFields())
-      usersRepostsCountersMap.set(targetPosterAddress, Field(pRepost.userRepostsCounter));
-      targetsRepostsCountersMap.set(Field(target!.postKey), Field(pRepost.targetRepostsCounter));
-
-      repostsContext.totalNumberOfReposts += 1;
-    }
-
-    const pendingRepostDeletions = await prisma.repostDeletions.findMany({
-      where: {
-        allDeletionsCounter: {
-          gt: totalNumberOfRepostDeletions,
-        },
-        deletionBlockHeight: {
-          gt: 0
-        }
+      // Only update these values when the repost is new
+      if (pRepost.allRepostsCounter > repostsContext.totalNumberOfReposts) {
+        repostsContext.totalNumberOfReposts += 1;
+        const reposterAddressAsField = Poseidon.hash(reposterAddress.toFields())
+        usersRepostsCountersMap.set(reposterAddressAsField, Field(pRepost.userRepostsCounter));
+        targetsRepostsCountersMap.set(Field(pRepost.targetKey), Field(pRepost.targetRepostsCounter));
       }
-    });
+      
+      console.log('totalNumberOfReposts: ' + repostsContext.totalNumberOfReposts);
+      console.log('usersRepostsCountersMap: ' + usersRepostsCountersMap.getRoot().toString());
+      console.log('targetsRepostsCountersMap: ' + targetsRepostsCountersMap.getRoot().toString());
+      console.log('repostsMap: ' + repostsMap.getRoot().toString());
 
-    for (const pRepostDeletion of pendingRepostDeletions) {
-      const target = await prisma.reposts.findUnique({
+      await prisma.reposts.update({
         where: {
-          repostKey: pRepostDeletion.targetKey
-        }
-      });
-
-      console.log(pRepostDeletion);
-      const repostState = new RepostState({
-        isTargetPost: Bool(target!.isTargetPost),
-        targetKey: Field(target!.targetKey),
-        reposterAddress: PublicKey.fromBase58(target!.reposterAddress),
-        allRepostsCounter: Field(target!.allRepostsCounter),
-        userRepostsCounter: Field(target!.userRepostsCounter),
-        targetRepostsCounter: Field(target!.targetRepostsCounter),
-        repostBlockHeight: Field(target!.repostBlockHeight),
-        deletionBlockHeight: Field(target!.deletionBlockHeight),
-        restorationBlockHeight: Field(target!.restorationBlockHeight)
-      });
-
-      const repostKey = Field(target!.repostKey);
-      repostsMap.set(repostKey, repostState.hash());
-      totalNumberOfRepostDeletions += 1;
-    }
-
-    const pendingRepostRestorations = await prisma.repostRestorations.findMany({
-      where: {
-        allRestorationsCounter: {
-          gt: totalNumberOfRepostRestorations,
+          repostKey: pRepost.repostKey
         },
-        restorationBlockHeight: {
-          gt: 0
-        }
-      }
-    });
-
-    for (const pRepostRestoration of pendingRepostRestorations) {
-      const target = await prisma.reposts.findUnique({
-        where: {
-          repostKey: pRepostRestoration.targetKey
+        data: {
+          status: 'loaded'
         }
       });
-
-      console.log(pRepostRestoration);
-      const repostState = new RepostState({
-        isTargetPost: Bool(target!.isTargetPost),
-        targetKey: Field(target!.targetKey),
-        reposterAddress: PublicKey.fromBase58(target!.reposterAddress),
-        allRepostsCounter: Field(target!.allRepostsCounter),
-        userRepostsCounter: Field(target!.userRepostsCounter),
-        targetRepostsCounter: Field(target!.targetRepostsCounter),
-        repostBlockHeight: Field(target!.repostBlockHeight),
-        deletionBlockHeight: Field(target!.deletionBlockHeight),
-        restorationBlockHeight: Field(target!.restorationBlockHeight)
-      });
-
-      const repostKey = Field(target!.repostKey);
-      repostsMap.set(repostKey, repostState.hash());
-      totalNumberOfRepostRestorations += 1;
     }
+
   },
   (e) => {console.error(e)}
 )
@@ -980,14 +901,8 @@ server.patch<{Body: SignedRepostDeletion}>('/reposts/delete', async (request) =>
     return 'Repost is already deleted';
   }
 
-  const pendingDeletion = await prisma.repostDeletions.findFirst({
-    where: {
-      targetKey: repostKey
-    }
-  });
-  
-  if (pendingDeletion !== null && pendingDeletion?.deletionBlockHeight === 0n) {
-    return 'Repost deletion is already pending';
+  if (repost !== null && repost?.status !== 'loaded') {
+    return `Repost is still being confirmed. Status: ${repost?.status}`;
   }
 
   const repostState = new RepostState({
@@ -1011,25 +926,15 @@ server.patch<{Body: SignedRepostDeletion}>('/reposts/delete', async (request) =>
 
   // Check that message to delete repost is signed
   if (isSigned) {
-    console.log(repostKey);
-    const allDeletionsCounter = (await prisma.repostDeletions.count()) + 1;
-    console.log('allRepostDeletionsCounter: ' + allDeletionsCounter);
+    console.log('Deleting repost with key: ' + repostKey);
 
-    const deletionsForTarget = await prisma.repostDeletions.findMany({
+    await prisma.reposts.update({
       where: {
-        targetKey: repostKey
-      }
-    });
-    const targetDeletionsCounter = deletionsForTarget.length + 1;
-    console.log('targetRepostDeletionsCounter: ' + targetDeletionsCounter);
-
-    await prisma.repostDeletions.create({
+        repostKey: repostKey
+      },
       data: {
-        targetKey: repostKey,
-        allDeletionsCounter: allDeletionsCounter,
-        targetDeletionsCounter: targetDeletionsCounter,
-        deletionBlockHeight: 0,
-        deletionSignature: request.body.signedData.signature
+        status: 'delete',
+        pendingSignature: request.body.signedData.signature
       }
     });
 
@@ -1178,14 +1083,8 @@ server.patch<{Body: SignedRepostRestoration}>('/reposts/restore', async (request
     return 'Repost has not been deleted, so it cannot be restored';
   }
 
-  const pendingRestoration = await prisma.repostRestorations.findFirst({
-    where: {
-      targetKey: repostKey
-    }
-  });
-
-  if (pendingRestoration !== null && pendingRestoration!.restorationBlockHeight === 0n) {
-    return 'Repost restoration is already pending';
+  if (repost !== null && repost?.status !== 'loaded') {
+    return `Repost is still being confirmed. Status: ${repost?.status}`;
   }
 
   const repostState = new RepostState({
@@ -1207,25 +1106,15 @@ server.patch<{Body: SignedRepostRestoration}>('/reposts/restore', async (request
 
   // Check that message to restore repost is signed
   if (isSigned) {
-    console.log(request.body.repostKey);
-    const allRestorationsCounter = (await prisma.repostRestorations.count()) + 1;
-    console.log('allRepostsRestorationsCounter: ' + allRestorationsCounter);
+    console.log('Restoring repost with key: ' + request.body.repostKey);
 
-    const restorationsForTarget = await prisma.repostRestorations.findMany({
+    await prisma.reposts.update({
       where: {
-        targetKey: request.body.repostKey
-      }
-    });
-    const targetRestorationsCounter = restorationsForTarget.length + 1;
-    console.log('targetRepostsRestorationsCounter: ' + targetRestorationsCounter);
-
-    await prisma.repostRestorations.create({
+        repostKey: request.body.repostKey
+      },
       data: {
-        targetKey: request.body.repostKey,
-        allRestorationsCounter: allRestorationsCounter,
-        targetRestorationsCounter: targetRestorationsCounter,
-        restorationBlockHeight: 0,
-        restorationSignature: request.body.signedData.signature
+        status: 'restore',
+        pendingSignature: request.body.signedData.signature
       }
     });
 
@@ -1748,7 +1637,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
     }
 
     let numberOfDeletedReposts: number;
-    let reposts: Reposts[];
+    let reposts: Prisma.PromiseReturnType<typeof prisma.reposts.findMany>;
 
     if (reposterAddress === undefined) {
 
@@ -2041,21 +1930,15 @@ interface SignedData {
   data: string[]
 }
 
-// ============================================================================
-
 interface SignedPost {
   post: string,
   signedData: SignedData
 }
 
-// ============================================================================
-
 interface SignedComment {
   comment: string,
   signedData: SignedData
 }
-
-// ============================================================================
 
 interface PostsQuery {
   howMany: number,
@@ -2076,8 +1959,6 @@ interface RepostQuery {
   repostKey: string
 }
 
-// ============================================================================
-
 interface CommentsQuery {
   targetKey: string,
   howMany: number,
@@ -2085,8 +1966,6 @@ interface CommentsQuery {
   toBlock: number,
   commentKey: string
 }
-
-// ============================================================================
 
 interface ReactionQuery {
   reactionKey: string
@@ -2099,22 +1978,16 @@ interface SignedPostDeletion {
   signedData: SignedData
 }
 
-// ============================================================================
-
 interface SignedCommentDeletion {
   targetKey: string,
   commentKey: string,
   signedData: SignedData
 }
 
-// ============================================================================
-
 interface SignedReactionDeletion {
   reactionState: string,
   signedData: SignedData
 }
-
-// ============================================================================
 
 interface SignedRepostDeletion {
   targetKey: string,
@@ -2129,23 +2002,17 @@ interface SignedPostRestoration {
   signedData: SignedData
 }
 
-// ============================================================================
-
 interface SignedCommentRestoration {
   targetKey: string,
   commentKey: string,
   signedData: SignedData
 }
 
-// ============================================================================
-
 interface SignedRepostRestoration {
   targetKey: string,
   repostKey: string,
   signedData: SignedData
 }
-
-// ============================================================================
 
 interface SignedReactionRestoration {
   targetKey: string,
@@ -2160,14 +2027,10 @@ type EmbeddedReactions = {
   reactionWitness: string
 }
 
-// ============================================================================
-
 type EmbeddedComments = {
   commentState: string,
   commentWitness: string
 }
-
-// ============================================================================
 
 type EmbeddedReposts = {
   repostState: string,
@@ -2196,8 +2059,6 @@ type PostsResponse = {
   currentUserRepostWitness: string | undefined
 }
 
-// ============================================================================
-
 type CommentsResponse = {
   commentState: string,
   commentKey: string,
@@ -2205,8 +2066,6 @@ type CommentsResponse = {
   content: string,
   commentWitness: string,
 }
-
-// ============================================================================
 
 type RepostsResponse = {
   repostState: string,
@@ -2227,22 +2086,6 @@ type RepostsResponse = {
   numberOfReposts: number,
   numberOfRepostsWitness: string
 }
-
-// ============================================================================
-
-type Reposts = {
-  repostKey: string,
-  isTargetPost: boolean,
-  targetKey: string,
-  reposterAddress: string,
-  allRepostsCounter: bigint,
-  userRepostsCounter: bigint,
-  targetRepostsCounter: bigint,
-  repostBlockHeight: bigint,
-  deletionBlockHeight: bigint,
-  restorationBlockHeight: bigint,
-  repostSignature: string
-};
 
 // ============================================================================
 
@@ -2354,7 +2197,8 @@ const createSQLRepost = async (repostKey: Field, targetKey: Field, reposterAddre
       repostBlockHeight: 0,
       deletionBlockHeight: 0,
       restorationBlockHeight: 0,
-      repostSignature: signature
+      status: 'create',
+      pendingSignature: signature
     }
   });
 }
