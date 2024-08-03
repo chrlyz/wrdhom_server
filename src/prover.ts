@@ -1,6 +1,6 @@
 import { CircuitString, PublicKey, Signature, fetchLastBlock,
   MerkleMap, Field, Poseidon, Mina, PrivateKey,
-  fetchAccount, Cache, Bool } from 'o1js';
+  fetchAccount, Cache, Bool, checkZkappTransaction } from 'o1js';
 import { Config, PostState, PostsTransition, Posts,
   PostsContract, PostsProof, ReactionState,
   ReactionsTransition, Reactions, ReactionsContract,
@@ -210,6 +210,9 @@ const provingReactionDeletions = 10;
 const provingReactionRestorations = 11;
 let provingTurn = 0;
 
+const BLOCKCHAIN_LENGTH = 290;
+const DELAY = 10000;
+
 const MAX_ATTEMPTS = Number(process.env.MAX_ATTEMPTS);
 const INTERVAL = Number(process.env.INTERVAL);
 
@@ -243,37 +246,32 @@ while (true) {
       });
       // Handle possible pending transaction confirmation or failure
     } else {
-      postsContext.totalNumberOfPosts += pendingPosts.length;
-      for (const pPost of pendingPosts) {
-        const result = generateProvePostPublicationInputs(
-          pPost.pendingSignature!,
-          pPost.posterAddress,
-          pPost.postContentID,
-          pPost.allPostsCounter,
-          pPost.userPostsCounter,
-          pPost.pendingBlockHeight!,
-          pPost.deletionBlockHeight,
-          pPost.restorationBlockHeight
-        );
-        provePostPublicationsInputs.push(result);
-      }
-      
-      try {
-        /* If a pending transaction was confirmed, syncing onchain and server state,
-          restart loop to process new actions
+
+      const previousTransactionStatus = await waitForZkAppTransaction(pendingPosts[0].pendingTransaction);
+
+      if (previousTransactionStatus === 'confirmed') {
+        postsContext.totalNumberOfPosts += pendingPosts.length;
+        for (const pPost of pendingPosts) {
+          const result = generateProvePostPublicationInputs(
+            pPost.pendingSignature!,
+            pPost.posterAddress,
+            pPost.postContentID,
+            pPost.allPostsCounter,
+            pPost.userPostsCounter,
+            pPost.pendingBlockHeight!,
+            pPost.deletionBlockHeight,
+            pPost.restorationBlockHeight
+          );
+          provePostPublicationsInputs.push(result);
+        }
+  
+        /* If a pending transaction was confirmed, sync onchain and server state.
+           Then restart loop to process new actions.
         */
         console.log('Syncing onchain and server state since last post publications:');
         await assertPostsOnchainAndServerState(pendingPosts, pendingPosts[0].pendingBlockHeight!);
         continue;
-      } catch (error) {
-          /* If a pending transaction hasn't been successfully confirmed,
-            reset server state to process the pending actions with a new blockheight
-          */
-         if (error instanceof OnchainAndServerStateMismatchError) {
-          await resetServerPostPublicationsState(pendingPosts);
-         } else {
-          throw error;
-         }
+
       }
     }
 
@@ -336,6 +334,18 @@ while (true) {
     
       startTime = performance.now();
       const pendingTransaction = await updatePostsOnChainState(transitionsAndProofs);
+
+      for (const pPost of pendingPosts) {
+        await prisma.posts.update({
+          where: {
+            postKey: pPost.postKey
+          },
+          data: {
+            pendingTransaction: pendingTransaction.hash
+          }
+        });
+      }
+
       endTime = performance.now();
       console.log(`Merged ${pendingPosts.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
 
@@ -2081,7 +2091,7 @@ while (true) {
   if (provingTurn > provingReactionRestorations) {
     provingTurn = 0;
     console.log('Pause to wait for new actions before running loop again...');
-    await delay(10000);
+    await delay(DELAY);
   }
 }
 
@@ -4156,6 +4166,36 @@ async function getTransactionStatus(pendingTransaction: Mina.PendingTransaction)
     }
   } else {
     console.error('Transaction was not accepted for processing by the Mina daemon');
+    return 'rejected';
+  }
+}
+
+// ============================================================================
+
+type CheckZkappTransactionAwaited = Awaited<ReturnType<typeof checkZkappTransaction>>;
+
+// ============================================================================
+
+async function waitForZkAppTransaction(transactionHash: string | null) {
+  let previousTransactionState: CheckZkappTransactionAwaited = {
+    success: false,
+    failureReason: null
+  }
+  if (transactionHash === null) {
+    return 'missing'
+  }
+
+  while (previousTransactionState.success === false
+    && previousTransactionState.failureReason === null
+  ) {
+    previousTransactionState = await checkZkappTransaction(transactionHash, BLOCKCHAIN_LENGTH);
+    await delay(DELAY);
+  }
+
+  if (previousTransactionState.success === true) {
+    return 'confirmed';
+  } else if (previousTransactionState.failureReason !== null) {
+    console.log(previousTransactionState.failureReason.flat(2).join("\n"));
     return 'rejected';
   }
 }
