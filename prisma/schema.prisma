@@ -22,6 +22,7 @@ model comments {
   status                 status_enum?
   pendingBlockHeight     BigInt?
   pendingSignature       String?
+  pendingTransaction     String?
 }
 
 model posts {
@@ -36,6 +37,7 @@ model posts {
   status                 status_enum?
   pendingBlockHeight     BigInt?
   pendingSignature       String?
+  pendingTransaction     String?
 }
 
 model reactions {
@@ -53,6 +55,7 @@ model reactions {
   status                 status_enum?
   pendingBlockHeight     BigInt?
   pendingSignature       String?
+  pendingTransaction     String?
 }
 
 model reposts {
@@ -69,6 +72,7 @@ model reposts {
   status                 status_enum?
   pendingBlockHeight     BigInt?
   pendingSignature       String?
+  pendingTransaction     String?
 }
 
 enum status_enum {
