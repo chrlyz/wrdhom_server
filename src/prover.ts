@@ -11,8 +11,6 @@ import { Config, PostState, PostsTransition, Posts,
 import fs from 'fs/promises';
 import { performance } from 'perf_hooks';
 import { PrismaClient, Prisma } from '@prisma/client';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
 import {
   regenerateCommentsZkAppState,
   regeneratePostsZkAppState,
@@ -108,27 +106,23 @@ const reactionsContract = new ReactionsContract(reactionsContractAddress);
 const commentsContract = new CommentsContract(commentsContractAddress);
 const repostsContract = new RepostsContract(repostsContractAddress);
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const cachePath = join(__dirname, '..', '/cache/');
-
 let startTime = performance.now();
 console.log('Compiling Posts ZkProgram...');
-await Posts.compile({cache: Cache.FileSystem(cachePath)});
+await Posts.compile();
 console.log('Compiling PostsContract...');
-await PostsContract.compile({cache: Cache.FileSystem(cachePath)});
+await PostsContract.compile();
 console.log('Compiling Reactions ZkProgram...');
-await Reactions.compile({cache: Cache.FileSystem(cachePath)});
+await Reactions.compile();
 console.log('Compiling ReactionsContract...');
-await ReactionsContract.compile({cache: Cache.FileSystem(cachePath)});
+await ReactionsContract.compile();
 console.log('Compiling Comments ZkProgram...');
-await Comments.compile({cache: Cache.FileSystem(cachePath)});
+await Comments.compile();
 console.log('Compiling CommentsContract...');
-await CommentsContract.compile({cache: Cache.FileSystem(cachePath)});
+await CommentsContract.compile();
 console.log('Compiling Reposts ZkProgram...');
-await Reposts.compile({cache: Cache.FileSystem(cachePath)});
+await Reposts.compile();
 console.log('Compiling RepostsContract...');
-await RepostsContract.compile({cache: Cache.FileSystem(cachePath)});
+await RepostsContract.compile();
 console.log('Compiled');
 let endTime = performance.now();
 console.log(`${(endTime - startTime)/1000/60} minutes`);
@@ -220,7 +214,6 @@ while (true) {
   if (provingTurn === provingPosts) {
 
     let pendingPosts: PostsFindMany;
-    let provePostPublicationsInputs: ProvePostPublicationInputs[] = [];
 
     // Get actions that may have a pending associated transaction
     pendingPosts = await prisma.posts.findMany({
@@ -247,12 +240,16 @@ while (true) {
       // Handle possible pending transaction confirmation or failure
     } else {
 
+      console.log('Syncing onchain and server state since last post publications:');
       const previousTransactionStatus = await waitForZkAppTransaction(pendingPosts[0].pendingTransaction);
 
+      /* If a pending transaction was confirmed, sync onchain and server state.
+         Then restart loop to process new actions.
+      */
       if (previousTransactionStatus === 'confirmed') {
         postsContext.totalNumberOfPosts += pendingPosts.length;
         for (const pPost of pendingPosts) {
-          const result = generateProvePostPublicationInputs(
+          generateProvePostPublicationInputs(
             pPost.pendingSignature!,
             pPost.posterAddress,
             pPost.postContentID,
@@ -262,13 +259,8 @@ while (true) {
             pPost.deletionBlockHeight,
             pPost.restorationBlockHeight
           );
-          provePostPublicationsInputs.push(result);
         }
   
-        /* If a pending transaction was confirmed, sync onchain and server state.
-           Then restart loop to process new actions.
-        */
-        console.log('Syncing onchain and server state since last post publications:');
         await assertPostsOnchainAndServerState(pendingPosts, pendingPosts[0].pendingBlockHeight!);
         continue;
 
@@ -279,8 +271,8 @@ while (true) {
       postsContext.totalNumberOfPosts += pendingPosts.length;
       const lastBlock = await fetchLastBlock(configPosts.url);
       const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      const provePostPublicationsInputs: ProvePostPublicationInputs[] = [];
       console.log('Current blockheight for post publications: ' + currentBlockHeight);
-      provePostPublicationsInputs.length = 0;
       for (const pPost of pendingPosts) {
         const result = generateProvePostPublicationInputs(
           pPost.pendingSignature!,
@@ -369,7 +361,6 @@ while (true) {
   } else if (provingTurn === provingReactions) {
 
     let pendingReactions: ReactionsFindMany;
-    let proveReactionPublicationsInputs: ProveReactionPublicationInputs[] = [];
 
     // Get actions that may have a pending associated transaction
     pendingReactions = await prisma.reactions.findMany({
@@ -395,40 +386,33 @@ while (true) {
       });
       // Handle possible pending transaction confirmation or failure
     } else {
-      reactionsContext.totalNumberOfReactions += pendingReactions.length;
-      for (const pReaction of pendingReactions) {
-        const result = await generateProveReactionPublicationInputs(
-          pReaction.isTargetPost,
-          pReaction.targetKey,
-          pReaction.reactorAddress,
-          pReaction.reactionCodePoint,
-          pReaction.allReactionsCounter,
-          pReaction.userReactionsCounter,
-          pReaction.targetReactionsCounter,
-          pReaction.pendingBlockHeight!,
-          pReaction.deletionBlockHeight,
-          pReaction.restorationBlockHeight,
-          pReaction.pendingSignature!
-        );
-        proveReactionPublicationsInputs.push(result);
-      }
-      
-      try {
-        /* If a pending transaction was confirmed, syncing onchain and server state,
-          restart loop to process new actions
-        */
-        console.log('Syncing onchain and server state since last reaction publications:');
+
+      console.log('Syncing onchain and server state since last reaction publications:');
+      const previousTransactionStatus = await waitForZkAppTransaction(pendingReactions[0].pendingTransaction);
+
+      /* If a pending transaction was confirmed, sync onchain and server state.
+         Then restart loop to process new actions.
+      */
+      if (previousTransactionStatus === 'confirmed') {
+        reactionsContext.totalNumberOfReactions += pendingReactions.length;
+        for (const pReaction of pendingReactions) {
+          await generateProveReactionPublicationInputs(
+            pReaction.isTargetPost,
+            pReaction.targetKey,
+            pReaction.reactorAddress,
+            pReaction.reactionCodePoint,
+            pReaction.allReactionsCounter,
+            pReaction.userReactionsCounter,
+            pReaction.targetReactionsCounter,
+            pReaction.pendingBlockHeight!,
+            pReaction.deletionBlockHeight,
+            pReaction.restorationBlockHeight,
+            pReaction.pendingSignature!
+          );
+        }
+
         await assertReactionsOnchainAndServerState(pendingReactions, pendingReactions[0].pendingBlockHeight!);
         continue;
-      } catch (error) {
-          /* If a pending transaction hasn't been successfully confirmed,
-            reset server state to process the pending actions with a new blockheight
-          */
-         if (error instanceof OnchainAndServerStateMismatchError) {
-          await resetServerReactionPublicationsState(pendingReactions);
-         } else {
-          throw error;
-         }
       }
     }
 
@@ -436,8 +420,8 @@ while (true) {
       reactionsContext.totalNumberOfReactions += pendingReactions.length;
       const lastBlock = await fetchLastBlock(configReactions.url);
       const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      const proveReactionPublicationsInputs: ProveReactionPublicationInputs[] = [];
       console.log('Current blockheight for reaction publications: ' + currentBlockHeight);
-      proveReactionPublicationsInputs.length = 0;
       for (const pReaction of pendingReactions) {
         const result = await generateProveReactionPublicationInputs(
           pReaction.isTargetPost,
@@ -494,6 +478,18 @@ while (true) {
     
       startTime = performance.now();
       const pendingTransaction = await updateReactionsOnChainState(transitionsAndProofs);
+
+      for (const pReaction of pendingReactions) {
+        await prisma.reactions.update({
+          where: {
+            reactionKey: pReaction.reactionKey
+          },
+          data: {
+            pendingTransaction: pendingTransaction.hash
+          }
+        });
+      }
+
       endTime = performance.now();
       console.log(`Merged ${pendingReactions.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
 
@@ -517,7 +513,6 @@ while (true) {
   } else if (provingTurn === provingComments) {
 
     let pendingComments: CommentsFindMany;
-    let proveCommentPublicationsInputs: ProveCommentPublicationInputs[] = [];
 
     // Get actions that may have a pending associated transaction
     pendingComments = await prisma.comments.findMany({
@@ -543,40 +538,33 @@ while (true) {
       });
       // Handle possible pending transaction confirmation or failure
     } else {
-      commentsContext.totalNumberOfComments += pendingComments.length;
-      for (const pComment of pendingComments) {
-        const result = await generateProveCommentPublicationInputs(
-          pComment.isTargetPost,
-          pComment.targetKey,
-          pComment.commenterAddress,
-          pComment.commentContentID,
-          pComment.allCommentsCounter,
-          pComment.userCommentsCounter,
-          pComment.targetCommentsCounter,
-          pComment.pendingBlockHeight!,
-          pComment.deletionBlockHeight,
-          pComment.restorationBlockHeight,
-          pComment.pendingSignature!
-        );
-        proveCommentPublicationsInputs.push(result);
-      }
-      
-      try {
-        /* If a pending transaction was confirmed, syncing onchain and server state,
-          restart loop to process new actions
-        */
-        console.log('Syncing onchain and server state since last comment publications:');
+
+      console.log('Syncing onchain and server state since last comment publications:');
+      const previousTransactionStatus = await waitForZkAppTransaction(pendingComments[0].pendingTransaction);
+
+      /* If a pending transaction was confirmed, sync onchain and server state.
+         Then restart loop to process new actions.
+      */
+      if (previousTransactionStatus === 'confirmed') {
+        commentsContext.totalNumberOfComments += pendingComments.length;
+        for (const pComment of pendingComments) {
+          await generateProveCommentPublicationInputs(
+            pComment.isTargetPost,
+            pComment.targetKey,
+            pComment.commenterAddress,
+            pComment.commentContentID,
+            pComment.allCommentsCounter,
+            pComment.userCommentsCounter,
+            pComment.targetCommentsCounter,
+            pComment.pendingBlockHeight!,
+            pComment.deletionBlockHeight,
+            pComment.restorationBlockHeight,
+            pComment.pendingSignature!
+          );
+        }
+
         await assertCommentsOnchainAndServerState(pendingComments, pendingComments[0].pendingBlockHeight!);
         continue;
-      } catch (error) {
-          /* If a pending transaction hasn't been successfully confirmed,
-            reset server state to process the pending actions with a new blockheight
-          */
-         if (error instanceof OnchainAndServerStateMismatchError) {
-          await resetServerCommentPublicationsState(pendingComments);
-         } else {
-          throw error;
-         }
       }
     }
 
@@ -584,8 +572,8 @@ while (true) {
       commentsContext.totalNumberOfComments += pendingComments.length;
       const lastBlock = await fetchLastBlock(configComments.url);
       const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      const proveCommentPublicationsInputs: ProveCommentPublicationInputs[] = [];
       console.log('Current blockheight for comment publications: ' + currentBlockHeight);
-      proveCommentPublicationsInputs.length = 0;
       for (const pComment of pendingComments) {
         const result = await generateProveCommentPublicationInputs(
           pComment.isTargetPost,
@@ -642,6 +630,18 @@ while (true) {
     
       startTime = performance.now();
       const pendingTransaction = await updateCommentsOnChainState(transitionsAndProofs);
+
+      for (const pComment of pendingComments) {
+        await prisma.comments.update({
+          where: {
+            commentKey: pComment.commentKey
+          },
+          data: {
+            pendingTransaction: pendingTransaction.hash
+          }
+        });
+      }
+
       endTime = performance.now();
       console.log(`Merged ${pendingComments.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
 
@@ -665,7 +665,6 @@ while (true) {
   } else if (provingTurn === provingReposts) {
 
     let pendingReposts: RepostsFindMany;
-    let proveRepostPublicationsInputs: ProveRepostPublicationInputs[] = [];
 
     // Get actions that may have a pending associated transaction
     pendingReposts = await prisma.reposts.findMany({
@@ -691,39 +690,32 @@ while (true) {
       });
       // Handle possible pending transaction confirmation or failure
     } else {
-      repostsContext.totalNumberOfReposts += pendingReposts.length;
-      for (const pRepost of pendingReposts) {
-        const result = await generateProveRepostPublicationInputs(
-          pRepost.isTargetPost,
-          pRepost.targetKey,
-          pRepost.reposterAddress,
-          pRepost.allRepostsCounter,
-          pRepost.userRepostsCounter,
-          pRepost.targetRepostsCounter,
-          pRepost.pendingBlockHeight!,
-          pRepost.deletionBlockHeight,
-          pRepost.restorationBlockHeight,
-          pRepost.pendingSignature!
-        );
-        proveRepostPublicationsInputs.push(result);
-      }
-      
-      try {
-        /* If a pending transaction was confirmed, syncing onchain and server state,
-          restart loop to process new actions
-        */
-        console.log('Syncing onchain and server state since last repost publications:');
+
+      console.log('Syncing onchain and server state since last repost publications:');
+      const previousTransactionStatus = await waitForZkAppTransaction(pendingReposts[0].pendingTransaction);
+
+      /* If a pending transaction was confirmed, sync onchain and server state.
+         Then restart loop to process new actions.
+      */
+      if (previousTransactionStatus === 'confirmed') {
+        repostsContext.totalNumberOfReposts += pendingReposts.length;
+        for (const pRepost of pendingReposts) {
+          await generateProveRepostPublicationInputs(
+            pRepost.isTargetPost,
+            pRepost.targetKey,
+            pRepost.reposterAddress,
+            pRepost.allRepostsCounter,
+            pRepost.userRepostsCounter,
+            pRepost.targetRepostsCounter,
+            pRepost.pendingBlockHeight!,
+            pRepost.deletionBlockHeight,
+            pRepost.restorationBlockHeight,
+            pRepost.pendingSignature!
+          );
+        }
+
         await assertRepostsOnchainAndServerState(pendingReposts, pendingReposts[0].pendingBlockHeight!);
         continue;
-      } catch (error) {
-          /* If a pending transaction hasn't been successfully confirmed,
-            reset server state to process the pending actions with a new blockheight
-          */
-         if (error instanceof OnchainAndServerStateMismatchError) {
-          await resetServerRepostPublicationsState(pendingReposts);
-         } else {
-          throw error;
-         }
       }
     }
 
@@ -731,8 +723,8 @@ while (true) {
       repostsContext.totalNumberOfReposts += pendingReposts.length;
       const lastBlock = await fetchLastBlock(configReposts.url);
       const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      const proveRepostPublicationsInputs: ProveRepostPublicationInputs[] = [];
       console.log('Current blockheight for repost publications: ' + currentBlockHeight);
-      proveRepostPublicationsInputs.length = 0;
       for (const pRepost of pendingReposts) {
         const result = await generateProveRepostPublicationInputs(
           pRepost.isTargetPost,
@@ -788,6 +780,18 @@ while (true) {
     
       startTime = performance.now();
       const pendingTransaction = await updateRepostsOnChainState(transitionsAndProofs);
+
+      for (const pRepost of pendingReposts) {
+        await prisma.reposts.update({
+          where: {
+            repostKey: pRepost.repostKey
+          },
+          data: {
+            pendingTransaction: pendingTransaction.hash
+          }
+        });
+      }
+
       endTime = performance.now();
       console.log(`Merged ${pendingReposts.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
 
@@ -811,7 +815,6 @@ while (true) {
   } else if (provingTurn === provingPostDeletions) {
 
      let pendingPostDeletions: PostsFindMany;
-     let provePostDeletionsInputs: ProvePostUpdateInputs[] = [];
  
      // Get actions that may have a pending associated transaction
      pendingPostDeletions = await prisma.posts.findMany({
@@ -837,46 +840,39 @@ while (true) {
        });
        // Handle possible pending transaction confirmation or failure
      } else {
-       for (const pendingPostDeletion of pendingPostDeletions) {
-         const result = generateProvePostDeletionInputs(
-          pendingPostDeletion.posterAddress,
-          pendingPostDeletion.postContentID,
-          pendingPostDeletion.allPostsCounter,
-          pendingPostDeletion.userPostsCounter,
-          pendingPostDeletion.postBlockHeight,
-          pendingPostDeletion.restorationBlockHeight,
-          Field(pendingPostDeletion.postKey),
-          pendingPostDeletion.pendingSignature!,
-          Field(pendingPostDeletion.pendingBlockHeight!),
-          Field(postsContext.totalNumberOfPosts)
-         );
-         provePostDeletionsInputs.push(result);
-       }
-       
-       try {
-         /* If a pending transaction was confirmed, syncing onchain and server state,
-           restart loop to process new actions
-         */
-         console.log('Syncing onchain and server state since last post deletions:');
-         await assertPostsOnchainAndServerState(pendingPostDeletions, pendingPostDeletions[0].pendingBlockHeight!);
-         continue;
-       } catch (error) {
-           /* If a pending transaction hasn't been successfully confirmed,
-             reset server state to process the pending actions with a new blockheight
-           */
-          if (error instanceof OnchainAndServerStateMismatchError) {
-           resetServerPostUpdatesState(pendingPostDeletions);
-          } else {
-           throw error;
+
+        console.log('Syncing onchain and server state since last post deletions:');
+        const previousTransactionStatus = await waitForZkAppTransaction(pendingPostDeletions[0].pendingTransaction);
+
+        /* If a pending transaction was confirmed, sync onchain and server state.
+           Then restart loop to process new actions.
+        */
+        if (previousTransactionStatus === 'confirmed') {
+          for (const pendingPostDeletion of pendingPostDeletions) {
+            generateProvePostDeletionInputs(
+              pendingPostDeletion.posterAddress,
+              pendingPostDeletion.postContentID,
+              pendingPostDeletion.allPostsCounter,
+              pendingPostDeletion.userPostsCounter,
+              pendingPostDeletion.postBlockHeight,
+              pendingPostDeletion.restorationBlockHeight,
+              Field(pendingPostDeletion.postKey),
+              pendingPostDeletion.pendingSignature!,
+              Field(pendingPostDeletion.pendingBlockHeight!),
+              Field(postsContext.totalNumberOfPosts)
+            );
           }
-       }
+
+          await assertPostsOnchainAndServerState(pendingPostDeletions, pendingPostDeletions[0].pendingBlockHeight!);
+          continue;
+        }
      }
  
      if (pendingPostDeletions.length !== 0) {
        const lastBlock = await fetchLastBlock(configPosts.url);
        const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+       const provePostDeletionsInputs: ProvePostUpdateInputs[] = [];
        console.log('Current blockheight for post deletions: ' + currentBlockHeight);
-       provePostDeletionsInputs.length = 0;
        for (const pendingPostDeletion of pendingPostDeletions) {
          const result = generateProvePostDeletionInputs(
           pendingPostDeletion.posterAddress,
@@ -932,6 +928,18 @@ while (true) {
      
        startTime = performance.now();
        const pendingTransaction = await updatePostsOnChainState(transitionsAndProofs);
+
+       for (const pendingPostDeletion of pendingPostDeletions) {
+        await prisma.posts.update({
+          where: {
+            postKey: pendingPostDeletion.postKey
+          },
+          data: {
+            pendingTransaction: pendingTransaction.hash
+          }
+        });
+      }
+
        endTime = performance.now();
        console.log(`Merged ${pendingPostDeletions.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
  
@@ -956,7 +964,6 @@ while (true) {
 
 
     let pendingPostRestorations: PostsFindMany;
-    let provePostRestorationsInputs: ProvePostUpdateInputs[] = [];
 
     // Get actions that may have a pending associated transaction
     pendingPostRestorations = await prisma.posts.findMany({
@@ -982,47 +989,40 @@ while (true) {
       });
       // Handle possible pending transaction confirmation or failure
     } else {
-      for (const pendingPostRestoration of pendingPostRestorations) {
-        const result = generateProvePostRestorationInputs(
-          pendingPostRestoration.posterAddress,
-          pendingPostRestoration.postContentID,
-          pendingPostRestoration.allPostsCounter,
-          pendingPostRestoration.userPostsCounter,
-          pendingPostRestoration.postBlockHeight,
-          pendingPostRestoration.deletionBlockHeight,
-          pendingPostRestoration.restorationBlockHeight,
-          Field(pendingPostRestoration.postKey),
-          pendingPostRestoration.pendingSignature!,
-          Field(pendingPostRestoration.pendingBlockHeight!),
-          Field(postsContext.totalNumberOfPosts)
-        );
-        provePostRestorationsInputs.push(result);
-      }
-      
-      try {
-        /* If a pending transaction was confirmed, syncing onchain and server state,
-          restart loop to process new actions
-        */
+
         console.log('Syncing onchain and server state since last post restorations:');
-        await assertPostsOnchainAndServerState(pendingPostRestorations, pendingPostRestorations[0].pendingBlockHeight!);
-        continue;
-      } catch (error) {
-          /* If a pending transaction hasn't been successfully confirmed,
-            reset server state to process the pending actions with a new blockheight
-          */
-         if (error instanceof OnchainAndServerStateMismatchError) {
-          resetServerPostUpdatesState(pendingPostRestorations);
-         } else {
-          throw error;
-         }
-      }
+        const previousTransactionStatus = await waitForZkAppTransaction(pendingPostRestorations[0].pendingTransaction);
+
+        /* If a pending transaction was confirmed, sync onchain and server state.
+           Then restart loop to process new actions.
+        */
+        if (previousTransactionStatus === 'confirmed') {
+          for (const pendingPostRestoration of pendingPostRestorations) {
+            generateProvePostRestorationInputs(
+              pendingPostRestoration.posterAddress,
+              pendingPostRestoration.postContentID,
+              pendingPostRestoration.allPostsCounter,
+              pendingPostRestoration.userPostsCounter,
+              pendingPostRestoration.postBlockHeight,
+              pendingPostRestoration.deletionBlockHeight,
+              pendingPostRestoration.restorationBlockHeight,
+              Field(pendingPostRestoration.postKey),
+              pendingPostRestoration.pendingSignature!,
+              Field(pendingPostRestoration.pendingBlockHeight!),
+              Field(postsContext.totalNumberOfPosts)
+            );
+          }
+
+          await assertPostsOnchainAndServerState(pendingPostRestorations, pendingPostRestorations[0].pendingBlockHeight!);
+          continue;
+        }
     }
 
     if (pendingPostRestorations.length !== 0) {
       const lastBlock = await fetchLastBlock(configPosts.url);
       const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      const provePostRestorationsInputs: ProvePostUpdateInputs[] = [];
       console.log('Current blockheight for post restorations: ' + currentBlockHeight);
-      provePostRestorationsInputs.length = 0;
       for (const pendingPostRestoration of pendingPostRestorations) {
         const result = generateProvePostRestorationInputs(
           pendingPostRestoration.posterAddress,
@@ -1079,6 +1079,18 @@ while (true) {
     
       startTime = performance.now();
       const pendingTransaction = await updatePostsOnChainState(transitionsAndProofs);
+
+      for (const pendingPostRestoration of pendingPostRestorations) {
+        await prisma.posts.update({
+          where: {
+            postKey: pendingPostRestoration.postKey
+          },
+          data: {
+            pendingTransaction: pendingTransaction.hash
+          }
+        });
+      }
+
       endTime = performance.now();
       console.log(`Merged ${pendingPostRestorations.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
 
@@ -1102,7 +1114,6 @@ while (true) {
   } else if (provingTurn === provingCommentDeletions) {
 
     let pendingCommentDeletions: CommentsFindMany;
-    let proveCommentDeletionsInputs: ProveCommentUpdateInputs[] = [];
 
     // Get actions that may have a pending associated transaction
     pendingCommentDeletions = await prisma.comments.findMany({
@@ -1128,56 +1139,49 @@ while (true) {
       });
       // Handle possible pending transaction confirmation or failure
     } else {
-      for (const pendingCommentDeletion of pendingCommentDeletions) {
-        const parent = await prisma.posts.findUnique({
-          where: {
-            postKey: pendingCommentDeletion.targetKey
-          }
-        });
 
-        const result = generateProveCommentDeletionInputs(
-          parent,
-          pendingCommentDeletion.isTargetPost,
-          pendingCommentDeletion.targetKey,
-          pendingCommentDeletion.commenterAddress,
-          pendingCommentDeletion.commentContentID,
-          pendingCommentDeletion.allCommentsCounter,
-          pendingCommentDeletion.userCommentsCounter,
-          pendingCommentDeletion.targetCommentsCounter,
-          pendingCommentDeletion.commentBlockHeight,
-          pendingCommentDeletion.restorationBlockHeight,
-          Field(pendingCommentDeletion.commentKey),
-          pendingCommentDeletion.pendingSignature!,
-          Field(pendingCommentDeletion.pendingBlockHeight!),
-          Field(commentsContext.totalNumberOfComments)
-        );
-        proveCommentDeletionsInputs.push(result);
-      }
-      
-      try {
-        /* If a pending transaction was confirmed, syncing onchain and server state,
-          restart loop to process new actions
-        */
         console.log('Syncing onchain and server state since last comment deletions:');
-        await assertCommentsOnchainAndServerState(pendingCommentDeletions, pendingCommentDeletions[0].pendingBlockHeight!);
-        continue;
-      } catch (error) {
-          /* If a pending transaction hasn't been successfully confirmed,
-            reset server state to process the pending actions with a new blockheight
-          */
-         if (error instanceof OnchainAndServerStateMismatchError) {
-          resetServerCommentUpdatesState(pendingCommentDeletions);
-         } else {
-          throw error;
-         }
-      }
+        const previousTransactionStatus = await waitForZkAppTransaction(pendingCommentDeletions[0].pendingTransaction);
+
+        /* If a pending transaction was confirmed, sync onchain and server state.
+           Then restart loop to process new actions.
+        */
+        if (previousTransactionStatus === 'confirmed') {
+          for (const pendingCommentDeletion of pendingCommentDeletions) {
+            const parent = await prisma.posts.findUnique({
+              where: {
+                postKey: pendingCommentDeletion.targetKey
+              }
+            });
+
+            generateProveCommentDeletionInputs(
+              parent,
+              pendingCommentDeletion.isTargetPost,
+              pendingCommentDeletion.targetKey,
+              pendingCommentDeletion.commenterAddress,
+              pendingCommentDeletion.commentContentID,
+              pendingCommentDeletion.allCommentsCounter,
+              pendingCommentDeletion.userCommentsCounter,
+              pendingCommentDeletion.targetCommentsCounter,
+              pendingCommentDeletion.commentBlockHeight,
+              pendingCommentDeletion.restorationBlockHeight,
+              Field(pendingCommentDeletion.commentKey),
+              pendingCommentDeletion.pendingSignature!,
+              Field(pendingCommentDeletion.pendingBlockHeight!),
+              Field(commentsContext.totalNumberOfComments)
+            );
+          }
+
+          await assertCommentsOnchainAndServerState(pendingCommentDeletions, pendingCommentDeletions[0].pendingBlockHeight!);
+          continue;
+        }
     }
 
     if (pendingCommentDeletions.length !== 0) {
       const lastBlock = await fetchLastBlock(configComments.url);
       const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      const proveCommentDeletionsInputs: ProveCommentUpdateInputs[] = [];
       console.log('Current blockheight for comment deletions: ' + currentBlockHeight);
-      proveCommentDeletionsInputs.length = 0;
       for (const pendingCommentDeletion of pendingCommentDeletions) {
         const parent = await prisma.posts.findUnique({
           where: {
@@ -1243,6 +1247,18 @@ while (true) {
     
       startTime = performance.now();
       const pendingTransaction = await updateCommentsOnChainState(transitionsAndProofs);
+
+      for (const pendingCommentDeletion of pendingCommentDeletions) {
+        await prisma.comments.update({
+          where: {
+            commentKey: pendingCommentDeletion.commentKey
+          },
+          data: {
+            pendingTransaction: pendingTransaction.hash
+          }
+        });
+      }
+
       endTime = performance.now();
       console.log(`Merged ${pendingCommentDeletions.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
 
@@ -1266,7 +1282,6 @@ while (true) {
   } else if (provingTurn === provingCommentRestorations) {
 
     let pendingCommentRestorations: CommentsFindMany;
-    let proveCommentRestorationsInputs: ProveCommentUpdateInputs[] = [];
 
     // Get actions that may have a pending associated transaction
     pendingCommentRestorations = await prisma.comments.findMany({
@@ -1292,57 +1307,50 @@ while (true) {
       });
       // Handle possible pending transaction confirmation or failure
     } else {
-      for (const pendingCommentRestoration of pendingCommentRestorations) {
-        const parent = await prisma.posts.findUnique({
-          where: {
-            postKey: pendingCommentRestoration.targetKey
-          }
-        });
 
-        const result = generateProveCommentRestorationInputs(
-          parent,
-          pendingCommentRestoration.isTargetPost,
-          pendingCommentRestoration.targetKey,
-          pendingCommentRestoration.commenterAddress,
-          pendingCommentRestoration.commentContentID,
-          pendingCommentRestoration.allCommentsCounter,
-          pendingCommentRestoration.userCommentsCounter,
-          pendingCommentRestoration.targetCommentsCounter,
-          pendingCommentRestoration.commentBlockHeight,
-          pendingCommentRestoration.deletionBlockHeight,
-          pendingCommentRestoration.restorationBlockHeight,
-          Field(pendingCommentRestoration.commentKey),
-          pendingCommentRestoration.pendingSignature!,
-          Field(pendingCommentRestoration.pendingBlockHeight!),
-          Field(commentsContext.totalNumberOfComments)
-        );
-        proveCommentRestorationsInputs.push(result);
-      }
-      
-      try {
-        /* If a pending transaction was confirmed, syncing onchain and server state,
-          restart loop to process new actions
-        */
         console.log('Syncing onchain and server state since last comment restorations:');
-        await assertCommentsOnchainAndServerState(pendingCommentRestorations, pendingCommentRestorations[0].pendingBlockHeight!);
-        continue;
-      } catch (error) {
-          /* If a pending transaction hasn't been successfully confirmed,
-            reset server state to process the pending actions with a new blockheight
-          */
-         if (error instanceof OnchainAndServerStateMismatchError) {
-          resetServerCommentUpdatesState(pendingCommentRestorations);
-         } else {
-          throw error;
-         }
-      }
+        const previousTransactionStatus = await waitForZkAppTransaction(pendingCommentRestorations[0].pendingTransaction);
+
+        /* If a pending transaction was confirmed, sync onchain and server state.
+           Then restart loop to process new actions.
+        */
+        if (previousTransactionStatus === 'confirmed') {
+          for (const pendingCommentRestoration of pendingCommentRestorations) {
+            const parent = await prisma.posts.findUnique({
+              where: {
+                postKey: pendingCommentRestoration.targetKey
+              }
+            });
+
+            generateProveCommentRestorationInputs(
+              parent,
+              pendingCommentRestoration.isTargetPost,
+              pendingCommentRestoration.targetKey,
+              pendingCommentRestoration.commenterAddress,
+              pendingCommentRestoration.commentContentID,
+              pendingCommentRestoration.allCommentsCounter,
+              pendingCommentRestoration.userCommentsCounter,
+              pendingCommentRestoration.targetCommentsCounter,
+              pendingCommentRestoration.commentBlockHeight,
+              pendingCommentRestoration.deletionBlockHeight,
+              pendingCommentRestoration.restorationBlockHeight,
+              Field(pendingCommentRestoration.commentKey),
+              pendingCommentRestoration.pendingSignature!,
+              Field(pendingCommentRestoration.pendingBlockHeight!),
+              Field(commentsContext.totalNumberOfComments)
+            );
+          }
+
+          await assertCommentsOnchainAndServerState(pendingCommentRestorations, pendingCommentRestorations[0].pendingBlockHeight!);
+          continue;
+        }
     }
 
     if (pendingCommentRestorations.length !== 0) {
       const lastBlock = await fetchLastBlock(configComments.url);
       const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      const proveCommentRestorationsInputs: ProveCommentUpdateInputs[] = [];
       console.log('Current blockheight for comment restorations: ' + currentBlockHeight);
-      proveCommentRestorationsInputs.length = 0;
       for (const pendingCommentRestoration of pendingCommentRestorations) {
         const parent = await prisma.posts.findUnique({
           where: {
@@ -1432,7 +1440,6 @@ while (true) {
   } else if (provingTurn === provingRepostDeletions) {
 
     let pendingRepostDeletions: RepostsFindMany;
-    let proveRepostDeletionsInputs: ProveRepostUpdateInputs[] = [];
 
     // Get actions that may have a pending associated transaction
     pendingRepostDeletions = await prisma.reposts.findMany({
@@ -1458,55 +1465,48 @@ while (true) {
       });
       // Handle possible pending transaction confirmation or failure
     } else {
-      for (const pendingRepostDeletion of pendingRepostDeletions) {
-        const parent = await prisma.posts.findUnique({
-          where: {
-            postKey: pendingRepostDeletion.targetKey
-          }
-        });
 
-        const result = generateProveRepostDeletionInputs(
-          parent,
-          pendingRepostDeletion.isTargetPost,
-          pendingRepostDeletion.targetKey,
-          pendingRepostDeletion.reposterAddress,
-          pendingRepostDeletion.allRepostsCounter,
-          pendingRepostDeletion.userRepostsCounter,
-          pendingRepostDeletion.targetRepostsCounter,
-          pendingRepostDeletion.repostBlockHeight,
-          pendingRepostDeletion.restorationBlockHeight,
-          Field(pendingRepostDeletion.repostKey),
-          pendingRepostDeletion.pendingSignature!,
-          Field(pendingRepostDeletion.pendingBlockHeight!),
-          Field(repostsContext.totalNumberOfReposts)
-        );
-        proveRepostDeletionsInputs.push(result);
-      }
-      
-      try {
-        /* If a pending transaction was confirmed, syncing onchain and server state,
-          restart loop to process new actions
-        */
         console.log('Syncing onchain and server state since last repost deletions:');
-        await assertRepostsOnchainAndServerState(pendingRepostDeletions, pendingRepostDeletions[0].pendingBlockHeight!);
-        continue;
-      } catch (error) {
-          /* If a pending transaction hasn't been successfully confirmed,
-            reset server state to process the pending actions with a new blockheight
-          */
-        if (error instanceof OnchainAndServerStateMismatchError) {
-          resetServerRepostUpdatesState(pendingRepostDeletions);
-        } else {
-          throw error;
+        const previousTransactionStatus = await waitForZkAppTransaction(pendingRepostDeletions[0].pendingTransaction);
+
+        /* If a pending transaction was confirmed, sync onchain and server state.
+           Then restart loop to process new actions.
+        */
+        if (previousTransactionStatus === 'confirmed') {
+          for (const pendingRepostDeletion of pendingRepostDeletions) {
+            const parent = await prisma.posts.findUnique({
+              where: {
+                postKey: pendingRepostDeletion.targetKey
+              }
+            });
+
+            generateProveRepostDeletionInputs(
+              parent,
+              pendingRepostDeletion.isTargetPost,
+              pendingRepostDeletion.targetKey,
+              pendingRepostDeletion.reposterAddress,
+              pendingRepostDeletion.allRepostsCounter,
+              pendingRepostDeletion.userRepostsCounter,
+              pendingRepostDeletion.targetRepostsCounter,
+              pendingRepostDeletion.repostBlockHeight,
+              pendingRepostDeletion.restorationBlockHeight,
+              Field(pendingRepostDeletion.repostKey),
+              pendingRepostDeletion.pendingSignature!,
+              Field(pendingRepostDeletion.pendingBlockHeight!),
+              Field(repostsContext.totalNumberOfReposts)
+            );
+          }
+
+          await assertRepostsOnchainAndServerState(pendingRepostDeletions, pendingRepostDeletions[0].pendingBlockHeight!);
+          continue;
         }
-      }
     }
 
     if (pendingRepostDeletions.length !== 0) {
       const lastBlock = await fetchLastBlock(configReposts.url);
       const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      const proveRepostDeletionsInputs: ProveRepostUpdateInputs[] = [];
       console.log('Current blockheight for repost deletions: ' + currentBlockHeight);
-      proveRepostDeletionsInputs.length = 0;
       for (const pendingRepostDeletion of pendingRepostDeletions) {
         const parent = await prisma.posts.findUnique({
           where: {
@@ -1571,6 +1571,18 @@ while (true) {
 
       startTime = performance.now();
       const pendingTransaction = await updateRepostsOnChainState(transitionsAndProofs);
+
+      for (const pendingRepostDeletion of pendingRepostDeletions) {
+        await prisma.reposts.update({
+          where: {
+            repostKey: pendingRepostDeletion.repostKey
+          },
+          data: {
+            pendingTransaction: pendingTransaction.hash
+          }
+        });
+      }
+
       endTime = performance.now();
       console.log(`Merged ${pendingRepostDeletions.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
 
@@ -1594,7 +1606,6 @@ while (true) {
   } else if (provingTurn === provingRepostRestorations) {
 
     let pendingRepostRestorations: RepostsFindMany;
-    let proveRepostRestorationsInputs: ProveRepostUpdateInputs[] = [];
 
     // Get actions that may have a pending associated transaction
     pendingRepostRestorations = await prisma.reposts.findMany({
@@ -1620,56 +1631,49 @@ while (true) {
       });
       // Handle possible pending transaction confirmation or failure
     } else {
-      for (const pendingRepostRestoration of pendingRepostRestorations) {
-        const parent = await prisma.posts.findUnique({
-          where: {
-            postKey: pendingRepostRestoration.targetKey
-          }
-        });
 
-        const result = generateProveRepostRestorationInputs(
-          parent,
-          pendingRepostRestoration.isTargetPost,
-          pendingRepostRestoration.targetKey,
-          pendingRepostRestoration.reposterAddress,
-          pendingRepostRestoration.allRepostsCounter,
-          pendingRepostRestoration.userRepostsCounter,
-          pendingRepostRestoration.targetRepostsCounter,
-          pendingRepostRestoration.repostBlockHeight,
-          pendingRepostRestoration.deletionBlockHeight,
-          pendingRepostRestoration.restorationBlockHeight,
-          Field(pendingRepostRestoration.repostKey),
-          pendingRepostRestoration.pendingSignature!,
-          Field(pendingRepostRestoration.pendingBlockHeight!),
-          Field(repostsContext.totalNumberOfReposts)
-        );
-        proveRepostRestorationsInputs.push(result);
-      }
-      
-      try {
-        /* If a pending transaction was confirmed, syncing onchain and server state,
-          restart loop to process new actions
-        */
         console.log('Syncing onchain and server state since last repost restorations:');
-        await assertRepostsOnchainAndServerState(pendingRepostRestorations, pendingRepostRestorations[0].pendingBlockHeight!);
-        continue;
-      } catch (error) {
-          /* If a pending transaction hasn't been successfully confirmed,
-            reset server state to process the pending actions with a new blockheight
-          */
-        if (error instanceof OnchainAndServerStateMismatchError) {
-          resetServerRepostUpdatesState(pendingRepostRestorations);
-        } else {
-          throw error;
+        const previousTransactionStatus = await waitForZkAppTransaction(pendingRepostRestorations[0].pendingTransaction);
+
+        /* If a pending transaction was confirmed, sync onchain and server state.
+           Then restart loop to process new actions.
+        */
+        if (previousTransactionStatus === 'confirmed') {
+          for (const pendingRepostRestoration of pendingRepostRestorations) {
+            const parent = await prisma.posts.findUnique({
+              where: {
+                postKey: pendingRepostRestoration.targetKey
+              }
+            });
+
+            generateProveRepostRestorationInputs(
+              parent,
+              pendingRepostRestoration.isTargetPost,
+              pendingRepostRestoration.targetKey,
+              pendingRepostRestoration.reposterAddress,
+              pendingRepostRestoration.allRepostsCounter,
+              pendingRepostRestoration.userRepostsCounter,
+              pendingRepostRestoration.targetRepostsCounter,
+              pendingRepostRestoration.repostBlockHeight,
+              pendingRepostRestoration.deletionBlockHeight,
+              pendingRepostRestoration.restorationBlockHeight,
+              Field(pendingRepostRestoration.repostKey),
+              pendingRepostRestoration.pendingSignature!,
+              Field(pendingRepostRestoration.pendingBlockHeight!),
+              Field(repostsContext.totalNumberOfReposts)
+            );
+          }
+
+          await assertRepostsOnchainAndServerState(pendingRepostRestorations, pendingRepostRestorations[0].pendingBlockHeight!);
+          continue;
         }
-      }
     }
 
     if (pendingRepostRestorations.length !== 0) {
       const lastBlock = await fetchLastBlock(configReposts.url);
       const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      const proveRepostRestorationsInputs: ProveRepostUpdateInputs[] = [];
       console.log('Current blockheight for repost restorations: ' + currentBlockHeight);
-      proveRepostRestorationsInputs.length = 0;
       for (const pendingRepostRestoration of pendingRepostRestorations) {
         const parent = await prisma.posts.findUnique({
           where: {
@@ -1735,6 +1739,18 @@ while (true) {
 
       startTime = performance.now();
       const pendingTransaction = await updateRepostsOnChainState(transitionsAndProofs);
+
+      for (const pendingRepostRestoration of pendingRepostRestorations) {
+        await prisma.reposts.update({
+          where: {
+            repostKey: pendingRepostRestoration.repostKey
+          },
+          data: {
+            pendingTransaction: pendingTransaction.hash
+          }
+        });
+      }
+
       endTime = performance.now();
       console.log(`Merged ${pendingRepostRestorations.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
 
@@ -1758,7 +1774,6 @@ while (true) {
   } else if (provingTurn === provingReactionDeletions) {
 
     let pendingReactionDeletions: ReactionsFindMany;
-    let proveReactionDeletionsInputs: ProveReactionUpdateInputs[] = [];
 
     // Get actions that may have a pending associated transaction
     pendingReactionDeletions = await prisma.reactions.findMany({
@@ -1784,56 +1799,49 @@ while (true) {
       });
       // Handle possible pending transaction confirmation or failure
     } else {
-      for (const pendingReactionDeletion of pendingReactionDeletions) {
-        const parent = await prisma.posts.findUnique({
-          where: {
-            postKey: pendingReactionDeletion.targetKey
-          }
-        });
 
-        const result = generateProveReactionDeletionInputs(
-          parent,
-          pendingReactionDeletion.isTargetPost,
-          pendingReactionDeletion.targetKey,
-          pendingReactionDeletion.reactorAddress,
-          pendingReactionDeletion.reactionCodePoint,
-          pendingReactionDeletion.allReactionsCounter,
-          pendingReactionDeletion.userReactionsCounter,
-          pendingReactionDeletion.targetReactionsCounter,
-          pendingReactionDeletion.reactionBlockHeight,
-          pendingReactionDeletion.restorationBlockHeight,
-          Field(pendingReactionDeletion.reactionKey),
-          pendingReactionDeletion.pendingSignature!,
-          Field(pendingReactionDeletion.pendingBlockHeight!),
-          Field(reactionsContext.totalNumberOfReactions)
-        );
-        proveReactionDeletionsInputs.push(result);
-      }
-      
-      try {
-        /* If a pending transaction was confirmed, syncing onchain and server state,
-          restart loop to process new actions
-        */
         console.log('Syncing onchain and server state since last reaction deletions:');
-        await assertReactionsOnchainAndServerState(pendingReactionDeletions, pendingReactionDeletions[0].pendingBlockHeight!);
-        continue;
-      } catch (error) {
-          /* If a pending transaction hasn't been successfully confirmed,
-            reset server state to process the pending actions with a new blockheight
-          */
-         if (error instanceof OnchainAndServerStateMismatchError) {
-          resetServerReactionUpdatesState(pendingReactionDeletions);
-         } else {
-          throw error;
-         }
-      }
+        const previousTransactionStatus = await waitForZkAppTransaction(pendingReactionDeletions[0].pendingTransaction);
+
+        /* If a pending transaction was confirmed, sync onchain and server state.
+          Then restart loop to process new actions.
+        */
+        if (previousTransactionStatus === 'confirmed') {
+          for (const pendingReactionDeletion of pendingReactionDeletions) {
+            const parent = await prisma.posts.findUnique({
+              where: {
+                postKey: pendingReactionDeletion.targetKey
+              }
+            });
+
+            generateProveReactionDeletionInputs(
+              parent,
+              pendingReactionDeletion.isTargetPost,
+              pendingReactionDeletion.targetKey,
+              pendingReactionDeletion.reactorAddress,
+              pendingReactionDeletion.reactionCodePoint,
+              pendingReactionDeletion.allReactionsCounter,
+              pendingReactionDeletion.userReactionsCounter,
+              pendingReactionDeletion.targetReactionsCounter,
+              pendingReactionDeletion.reactionBlockHeight,
+              pendingReactionDeletion.restorationBlockHeight,
+              Field(pendingReactionDeletion.reactionKey),
+              pendingReactionDeletion.pendingSignature!,
+              Field(pendingReactionDeletion.pendingBlockHeight!),
+              Field(reactionsContext.totalNumberOfReactions)
+            );
+          }
+
+          await assertReactionsOnchainAndServerState(pendingReactionDeletions, pendingReactionDeletions[0].pendingBlockHeight!);
+          continue;
+        }
     }
 
     if (pendingReactionDeletions.length !== 0) {
       const lastBlock = await fetchLastBlock(configReactions.url);
       const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      const proveReactionDeletionsInputs: ProveReactionUpdateInputs[] = [];
       console.log('Current blockheight for reaction deletions: ' + currentBlockHeight);
-      proveReactionDeletionsInputs.length = 0;
       for (const pendingReactionDeletion of pendingReactionDeletions) {
         const parent = await prisma.posts.findUnique({
           where: {
@@ -1899,6 +1907,18 @@ while (true) {
     
       startTime = performance.now();
       const pendingTransaction = await updateReactionsOnChainState(transitionsAndProofs);
+
+      for (const pendingReactionDeletion of pendingReactionDeletions) {
+        await prisma.reactions.update({
+          where: {
+            reactionKey: pendingReactionDeletion.reactionKey
+          },
+          data: {
+            pendingTransaction: pendingTransaction.hash
+          }
+        });
+      }
+
       endTime = performance.now();
       console.log(`Merged ${pendingReactionDeletions.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
 
@@ -1922,7 +1942,6 @@ while (true) {
   } else if (provingTurn === provingReactionRestorations) {
 
     let pendingReactionRestorations: ReactionsFindMany;
-    let proveReactionRestorationsInputs: ProveReactionUpdateInputs[] = [];
 
     // Get actions that may have a pending associated transaction
     pendingReactionRestorations = await prisma.reactions.findMany({
@@ -1948,57 +1967,50 @@ while (true) {
       });
       // Handle possible pending transaction confirmation or failure
     } else {
-      for (const pendingReactionRestoration of pendingReactionRestorations) {
-        const parent = await prisma.posts.findUnique({
-          where: {
-            postKey: pendingReactionRestoration.targetKey
-          }
-        });
-
-        const result = generateProveReactionRestorationInputs(
-          parent,
-          pendingReactionRestoration.isTargetPost,
-          pendingReactionRestoration.targetKey,
-          pendingReactionRestoration.reactorAddress,
-          pendingReactionRestoration.reactionCodePoint,
-          pendingReactionRestoration.allReactionsCounter,
-          pendingReactionRestoration.userReactionsCounter,
-          pendingReactionRestoration.targetReactionsCounter,
-          pendingReactionRestoration.reactionBlockHeight,
-          pendingReactionRestoration.deletionBlockHeight,
-          pendingReactionRestoration.restorationBlockHeight,
-          Field(pendingReactionRestoration.reactionKey),
-          pendingReactionRestoration.pendingSignature!,
-          Field(pendingReactionRestoration.pendingBlockHeight!),
-          Field(reactionsContext.totalNumberOfReactions)
-        );
-        proveReactionRestorationsInputs.push(result);
-      }
       
-      try {
-        /* If a pending transaction was confirmed, syncing onchain and server state,
-          restart loop to process new actions
-        */
-        console.log('Syncing onchain and server state since last reaction restorations:');
+      console.log('Syncing onchain and server state since last reaction restorations:');
+      const previousTransactionStatus = await waitForZkAppTransaction(pendingReactionRestorations[0].pendingTransaction);
+
+      /* If a pending transaction was confirmed, sync onchain and server state.
+         Then restart loop to process new actions.
+      */
+      if (previousTransactionStatus === 'confirmed') {
+        for (const pendingReactionRestoration of pendingReactionRestorations) {
+          const parent = await prisma.posts.findUnique({
+            where: {
+              postKey: pendingReactionRestoration.targetKey
+            }
+          });
+
+          generateProveReactionRestorationInputs(
+            parent,
+            pendingReactionRestoration.isTargetPost,
+            pendingReactionRestoration.targetKey,
+            pendingReactionRestoration.reactorAddress,
+            pendingReactionRestoration.reactionCodePoint,
+            pendingReactionRestoration.allReactionsCounter,
+            pendingReactionRestoration.userReactionsCounter,
+            pendingReactionRestoration.targetReactionsCounter,
+            pendingReactionRestoration.reactionBlockHeight,
+            pendingReactionRestoration.deletionBlockHeight,
+            pendingReactionRestoration.restorationBlockHeight,
+            Field(pendingReactionRestoration.reactionKey),
+            pendingReactionRestoration.pendingSignature!,
+            Field(pendingReactionRestoration.pendingBlockHeight!),
+            Field(reactionsContext.totalNumberOfReactions)
+          );
+        }
+
         await assertReactionsOnchainAndServerState(pendingReactionRestorations, pendingReactionRestorations[0].pendingBlockHeight!);
         continue;
-      } catch (error) {
-          /* If a pending transaction hasn't been successfully confirmed,
-            reset server state to process the pending actions with a new blockheight
-          */
-        if (error instanceof OnchainAndServerStateMismatchError) {
-          resetServerReactionUpdatesState(pendingReactionRestorations);
-        } else {
-          throw error;
-        }
       }
     }
 
     if (pendingReactionRestorations.length !== 0) {
       const lastBlock = await fetchLastBlock(configReactions.url);
       const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+      const proveReactionRestorationsInputs: ProveReactionUpdateInputs[] = [];
       console.log('Current blockheight for reaction restorations: ' + currentBlockHeight);
-      proveReactionRestorationsInputs.length = 0;
       for (const pendingReactionRestoration of pendingReactionRestorations) {
         const parent = await prisma.posts.findUnique({
           where: {
@@ -2065,6 +2077,18 @@ while (true) {
 
       startTime = performance.now();
       const pendingTransaction = await updateReactionsOnChainState(transitionsAndProofs);
+
+      for (const pendingReactionRestoration of pendingReactionRestorations) {
+        await prisma.reactions.update({
+          where: {
+            reactionKey: pendingReactionRestoration.reactionKey
+          },
+          data: {
+            pendingTransaction: pendingTransaction.hash
+          }
+        });
+      }
+
       endTime = performance.now();
       console.log(`Merged ${pendingReactionRestorations.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
 
@@ -3589,7 +3613,10 @@ async function assertPostsOnchainAndServerState(pendingPosts: PostsFindMany, blo
           },
           data: {
             postBlockHeight: blockHeight,
-            status: 'loading'
+            status: 'loading',
+            pendingBlockHeight: null,
+            pendingSignature: null,
+            pendingTransaction: null
           }
         });
       } else if (pPost.status === 'deleting') {
@@ -3599,7 +3626,10 @@ async function assertPostsOnchainAndServerState(pendingPosts: PostsFindMany, blo
           },
           data: {
             deletionBlockHeight: blockHeight,
-            status: 'loading'
+            status: 'loading',
+            pendingBlockHeight: null,
+            pendingSignature: null,
+            pendingTransaction: null
           }
         });
       } else if (pPost.status === 'restoring') {
@@ -3610,7 +3640,10 @@ async function assertPostsOnchainAndServerState(pendingPosts: PostsFindMany, blo
           data: {
             deletionBlockHeight: 0,
             restorationBlockHeight: blockHeight,
-            status: 'loading'
+            status: 'loading',
+            pendingBlockHeight: null,
+            pendingSignature: null,
+            pendingTransaction: null
           }
         });
       }
@@ -3662,7 +3695,10 @@ async function assertCommentsOnchainAndServerState(pendingComments: CommentsFind
           },
           data: {
             commentBlockHeight: blockHeight,
-            status: 'loading'
+            status: 'loading',
+            pendingBlockHeight: null,
+            pendingSignature: null,
+            pendingTransaction: null
           }
         });
       } else if (pComment.status === 'deleting') {
@@ -3672,7 +3708,10 @@ async function assertCommentsOnchainAndServerState(pendingComments: CommentsFind
           },
           data: {
             deletionBlockHeight: blockHeight,
-            status: 'loading'
+            status: 'loading',
+            pendingBlockHeight: null,
+            pendingSignature: null,
+            pendingTransaction: null
           }
         });
       } else if (pComment.status === 'restoring') {
@@ -3683,7 +3722,10 @@ async function assertCommentsOnchainAndServerState(pendingComments: CommentsFind
           data: {
             deletionBlockHeight: 0,
             restorationBlockHeight: blockHeight,
-            status: 'loading'
+            status: 'loading',
+            pendingBlockHeight: null,
+            pendingSignature: null,
+            pendingTransaction: null
           }
         });
       }
@@ -3735,7 +3777,10 @@ async function assertReactionsOnchainAndServerState(pendingReactions: ReactionsF
           },
           data: {
             reactionBlockHeight: blockHeight,
-            status: 'loading'
+            status: 'loading',
+            pendingBlockHeight: null,
+            pendingSignature: null,
+            pendingTransaction: null
           }
         });
       } else if (pReaction.status === 'deleting') {
@@ -3745,7 +3790,10 @@ async function assertReactionsOnchainAndServerState(pendingReactions: ReactionsF
           },
           data: {
             deletionBlockHeight: blockHeight,
-            status: 'loading'
+            status: 'loading',
+            pendingBlockHeight: null,
+            pendingSignature: null,
+            pendingTransaction: null
           }
         });
       } else if (pReaction.status === 'restoring') {
@@ -3756,7 +3804,10 @@ async function assertReactionsOnchainAndServerState(pendingReactions: ReactionsF
           data: {
             deletionBlockHeight: 0,
             restorationBlockHeight: blockHeight,
-            status: 'loading'
+            status: 'loading',
+            pendingBlockHeight: null,
+            pendingSignature: null,
+            pendingTransaction: null
           }
         });
       }
@@ -3808,7 +3859,10 @@ async function assertRepostsOnchainAndServerState(pendingReposts: RepostsFindMan
           },
           data: {
             repostBlockHeight: blockHeight,
-            status: 'loading'
+            status: 'loading',
+            pendingBlockHeight: null,
+            pendingSignature: null,
+            pendingTransaction: null
           }
         });
       } else if (pRepost.status === 'deleting') {
@@ -3818,7 +3872,10 @@ async function assertRepostsOnchainAndServerState(pendingReposts: RepostsFindMan
           },
           data: {
             deletionBlockHeight: blockHeight,
-            status: 'loading'
+            status: 'loading',
+            pendingBlockHeight: null,
+            pendingSignature: null,
+            pendingTransaction: null
           }
         });
       } else if (pRepost.status === 'restoring') {
@@ -3829,7 +3886,10 @@ async function assertRepostsOnchainAndServerState(pendingReposts: RepostsFindMan
           data: {
             deletionBlockHeight: 0,
             restorationBlockHeight: blockHeight,
-            status: 'loading'
+            status: 'loading',
+            pendingBlockHeight: null,
+            pendingSignature: null,
+            pendingTransaction: null
           }
         });
       }
