@@ -216,146 +216,33 @@ while (true) {
     let pendingPosts: PostsFindMany;
 
     // Get actions that may have a pending associated transaction
-    pendingPosts = await prisma.posts.findMany({
-      take: Number(process.env.PARALLEL_NUMBER),
-      orderBy: {
-          allPostsCounter: 'asc'
-      },
-      where: {
-          status: 'creating'
-      }
-    });
+    pendingPosts = await getPendingActions(prisma.posts, 'allPostsCounter', 'creating');
 
     // If there isn't a pending transaction, process new actions
     if (pendingPosts.length === 0) {
-      pendingPosts = await prisma.posts.findMany({
-        take: Number(process.env.PARALLEL_NUMBER),
-        orderBy: {
-            allPostsCounter: 'asc'
-        },
-        where: {
-            status: 'create'
-        }
-      });
+      pendingPosts = await getPendingActions(prisma.posts, 'allPostsCounter', 'create');
       // Handle possible pending transaction confirmation or failure
     } else {
-
-      console.log('Syncing onchain and server state since last post publications:');
-      const previousTransactionStatus = await waitForZkAppTransaction(pendingPosts[0].pendingTransaction);
-
-      /* If a pending transaction was confirmed, sync onchain and server state.
-         Then restart loop to process new actions.
-      */
-      if (previousTransactionStatus === 'confirmed') {
-        postsContext.totalNumberOfPosts += pendingPosts.length;
-        for (const pPost of pendingPosts) {
-          generateProvePostPublicationInputs(
-            pPost.pendingSignature!,
-            pPost.posterAddress,
-            pPost.postContentID,
-            pPost.allPostsCounter,
-            pPost.userPostsCounter,
-            pPost.pendingBlockHeight!,
-            pPost.deletionBlockHeight,
-            pPost.restorationBlockHeight
-          );
-        }
-  
-        await assertPostsOnchainAndServerState(pendingPosts, pendingPosts[0].pendingBlockHeight!);
-        continue;
-
-      }
+        await handlePendingTransaction(
+          pendingPosts,
+          postsContext,
+          generateProvePostPublicationInputs,
+          assertPostsOnchainAndServerState
+        )
     }
 
     if (pendingPosts.length !== 0) {
-      postsContext.totalNumberOfPosts += pendingPosts.length;
-      const lastBlock = await fetchLastBlock(configPosts.url);
-      const currentBlockHeight = lastBlock.blockchainLength.toBigint();
-      const provePostPublicationsInputs: ProvePostPublicationInputs[] = [];
-      console.log('Current blockheight for post publications: ' + currentBlockHeight);
-      for (const pPost of pendingPosts) {
-        const result = generateProvePostPublicationInputs(
-          pPost.pendingSignature!,
-          pPost.posterAddress,
-          pPost.postContentID,
-          pPost.allPostsCounter,
-          pPost.userPostsCounter,
-          currentBlockHeight,
-          pPost.deletionBlockHeight,
-          pPost.restorationBlockHeight
-        );
-        provePostPublicationsInputs.push(result);
-        pPost.status = 'creating';
-        await prisma.posts.update({
-          where: {
-            postKey: pPost.postKey
-          },
-          data: {
-            status: 'creating',
-            pendingBlockHeight: currentBlockHeight
-          }
-        });
-      }
-
-      const jobsPromises: Promise<any>[] = [];
-      for (const provePostPublicationInputs of provePostPublicationsInputs) {
-        const job = await postsQueue.add(
-          `job`,
-          { provePostPublicationInputs: provePostPublicationInputs }
-        );
-        jobsPromises.push(job.waitUntilFinished(postsQueueEvents));
-      }
-
-      startTime = performance.now();
-      const transitionsAndProofsAsStrings: {
-        transition: string;
-        proof: string;
-      }[] = await Promise.all(jobsPromises);
-      const transitionsAndProofs: {
-        transition: PostsTransition,
-        proof: PostsProof
-      }[] = [];
-      for (const transitionAndProof of transitionsAndProofsAsStrings) {
-        transitionsAndProofs.push({
-          transition: PostsTransition.fromJSON(JSON.parse(transitionAndProof.transition)),
-          proof: await PostsProof.fromJSON(JSON.parse(transitionAndProof.proof))
-        });
-      }
-      endTime = performance.now();
-      console.log(`Created ${pendingPosts.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
-    
-      startTime = performance.now();
-      const pendingTransaction = await updatePostsOnChainState(transitionsAndProofs);
-
-      for (const pPost of pendingPosts) {
-        await prisma.posts.update({
-          where: {
-            postKey: pPost.postKey
-          },
-          data: {
-            pendingTransaction: pendingTransaction.hash
-          }
-        });
-      }
-
-      endTime = performance.now();
-      console.log(`Merged ${pendingPosts.length} proofs in ${(endTime - startTime)/1000/60} minutes`);
-
-      startTime = performance.now();
-      console.log('Confirming post publications transaction...');
-      let status = 'pending';
-      while (status === 'pending') {
-        status = await getTransactionStatus(pendingTransaction);
-      }
-      endTime = performance.now();
-      console.log(`Waited ${(endTime - startTime)/1000/60} minutes for transaction confirmation or rejection`);
-
-      if (status === 'rejected') {
-        await resetServerPostPublicationsState(pendingPosts);
-        continue;
-      }
-
-      await assertPostsOnchainAndServerState(pendingPosts, currentBlockHeight);
+      await processPendingActions(
+        postsContext,
+        pendingPosts,
+        generateProvePostPublicationInputs,
+        postsQueue,
+        postsQueueEvents,
+        updatePostsOnChainState,
+        prisma.posts,
+        assertPostsOnchainAndServerState,
+        resetServerPostPublicationsState
+      )
     }
 
   } else if (provingTurn === provingReactions) {
@@ -2121,22 +2008,23 @@ while (true) {
 
 // ============================================================================
 
-function generateProvePostPublicationInputs(signatureBase58: string, posterAddressBase58: string,
-  postCID: string, allPostsCounter: bigint, userPostsCounter: bigint,
-  postBlockHeight: bigint, deletionBlockHeight: bigint, restorationBlockHeight: bigint) {
+function generateProvePostPublicationInputs(
+  pendingPost: PostsFindUnique,
+  currentBlockHeight: bigint = pendingPost?.pendingBlockHeight!
+) {
 
-  const signature = Signature.fromBase58(signatureBase58);
-  const posterAddress = PublicKey.fromBase58(posterAddressBase58);
-  const postCIDAsCircuitString = CircuitString.fromString(postCID.toString());
+  const signature = Signature.fromBase58(pendingPost?.pendingSignature!);
+  const posterAddress = PublicKey.fromBase58(pendingPost?.posterAddress!);
+  const postCIDAsCircuitString = CircuitString.fromString(pendingPost?.postContentID!);
 
       const postState = new PostState({
         posterAddress: posterAddress,
         postContentID: postCIDAsCircuitString,
-        allPostsCounter: Field(allPostsCounter),
-        userPostsCounter: Field(userPostsCounter),
-        postBlockHeight: Field(postBlockHeight),
-        deletionBlockHeight: Field(deletionBlockHeight),
-        restorationBlockHeight: Field(restorationBlockHeight)
+        allPostsCounter: Field(pendingPost?.allPostsCounter!),
+        userPostsCounter: Field(pendingPost?.userPostsCounter!),
+        postBlockHeight: Field(currentBlockHeight),
+        deletionBlockHeight: Field(pendingPost?.deletionBlockHeight!),
+        restorationBlockHeight: Field(pendingPost?.restorationBlockHeight!)
       });
 
       const initialUsersPostsCounters = usersPostsCountersMap.getRoot();
@@ -2167,7 +2055,7 @@ function generateProvePostPublicationInputs(signatureBase58: string, posterAddre
       console.log('Post publication transition created');
 
       return {
-        signature: signatureBase58,
+        signature: pendingPost?.pendingSignature!,
         transition: JSON.stringify(transition),
         postState: JSON.stringify(postState),
         initialUsersPostsCounters: initialUsersPostsCounters.toString(),
@@ -3345,11 +3233,23 @@ const reactionCodePointAsField = Field(reactionCodePoint);
 
 // ============================================================================
 
-function generateProveReactionRestorationInputs(parent: PostsFindUnique,
-isTargetPost: boolean, targetKey: string, reactorAddressBase58: string,
-reactionCodePoint: bigint, allReactionsCounter: bigint, userReactionsCounter: bigint, targetReactionsCounter: bigint,
-reactionBlockHeight: bigint, deletionBlockHeight: bigint, restorationBlockHeight: bigint, reactionKey: Field, signatureBase58: string,
-newRestorationBlockHeight: Field, currentAllReactionsCounter: Field) {
+function generateProveReactionRestorationInputs(
+  parent: PostsFindUnique,
+  isTargetPost: boolean,
+  targetKey: string,
+  reactorAddressBase58: string,
+  reactionCodePoint: bigint,
+  allReactionsCounter: bigint,
+  userReactionsCounter: bigint,
+  targetReactionsCounter: bigint,
+  reactionBlockHeight: bigint,
+  deletionBlockHeight: bigint,
+  restorationBlockHeight: bigint,
+  reactionKey: Field,
+  signatureBase58: string,
+  newRestorationBlockHeight: Field,
+  currentAllReactionsCounter: Field
+) {
 
 const signature = Signature.fromBase58(signatureBase58);
 const reactorAddress = PublicKey.fromBase58(reactorAddressBase58);
@@ -3568,14 +3468,30 @@ type ProveRepostUpdateInputs = {
   blockHeight: string
 }
 
+type TransitionsAndProofsAsStrings = {
+  transition: string;
+  proof: string;
+}
+
+type TransitionsAndProofs =
+  | { transition: PostsTransition; proof: PostsProof }
+  | { transition: ReactionsTransition; proof: ReactionsProof }
+  | { transition: CommentsTransition; proof: CommentsProof }
+  | { transition: RepostsTransition; proof: RepostsProof };
+
 // ============================================================================
 
 type PostsFindMany = Prisma.PromiseReturnType<typeof prisma.posts.findMany>;
 type CommentsFindMany = Prisma.PromiseReturnType<typeof prisma.comments.findMany>;
 type ReactionsFindMany = Prisma.PromiseReturnType<typeof prisma.reactions.findMany>;
 type RepostsFindMany = Prisma.PromiseReturnType<typeof prisma.reposts.findMany>;
+type FindMany = PostsFindMany | CommentsFindMany | ReactionsFindMany | RepostsFindMany;
 
 type PostsFindUnique = Prisma.PromiseReturnType<typeof prisma.posts.findUnique>;
+type CommentsFindUnique = Prisma.PromiseReturnType<typeof prisma.comments.findUnique>;
+type ReactionsFindUnique = Prisma.PromiseReturnType<typeof prisma.reactions.findUnique>;
+type RepostsFindUnique = Prisma.PromiseReturnType<typeof prisma.reposts.findUnique>;
+type FindUnique = PostsFindUnique | CommentsFindUnique | ReactionsFindUnique | RepostsFindUnique;
 
 // ============================================================================
 
@@ -4261,3 +4177,202 @@ async function waitForZkAppTransaction(transactionHash: string | null) {
 }
 
 // ============================================================================
+
+async function getPendingActions(model: any, allActionsCounter: string, status: string) {
+  return await model.findMany({
+      take: Number(process.env.PARALLEL_NUMBER),
+      orderBy: {
+          [allActionsCounter]: 'asc'
+      },
+      where: {
+          status: status
+      }
+  });
+}
+
+function getProperActionKey(pendingAction: FindUnique) {
+  const possibleKeys = ['postKey', 'reactionKey', 'commentKey', 'repostKey'] as const;
+  let actionKey: typeof possibleKeys[number] | undefined;
+  
+  for (const key of possibleKeys) {
+    if (key in pendingAction!) {
+      actionKey = key;
+      break;
+    }
+  }
+
+  if (!actionKey) {
+    throw new Error("No valid key found in pendingActions.");
+  }
+
+  return actionKey;
+}
+
+async function updateTransactionHash(
+  model: any,
+  pendingActions: FindMany,
+  pendingTransactionHash: string,
+) {
+  const actionKey = getProperActionKey(pendingActions[0]);
+  for (const pendingAction of pendingActions) {
+    await model.update({
+      where: {
+        [actionKey]: pendingAction[actionKey as keyof typeof pendingAction]
+      },
+      data: {
+        pendingTransaction: pendingTransactionHash
+      }
+    });
+  }
+}
+
+async function updateActionStatus(model: any, pendingActions: FindMany, currentBlockHeight: bigint) {
+  const actionKey = getProperActionKey(pendingActions[0]);
+  for (const pendingAction of pendingActions) {
+    await model.update({
+      where: {
+        [actionKey]: pendingAction[actionKey as keyof typeof pendingAction]
+      },
+      data: {
+        status: 'creating',
+        pendingBlockHeight: currentBlockHeight
+      }
+    });
+  }
+}
+
+function getProperContextKey(context: any) {
+  const possibleKeys = ['totalNumberOfPosts', 'totalNumberOfReactions', 'totalNumberOfComments', 'totalNumberOfReposts'] as const;
+  let contextKey: typeof possibleKeys[number] | undefined;
+  
+  for (const key of possibleKeys) {
+    if (key in context) {
+      contextKey = key;
+      break;
+    }
+  }
+
+  if (!contextKey) {
+    throw new Error("No valid key found in context.");
+  }
+
+  return contextKey;
+}
+
+async function handlePendingTransaction(
+  pendingActions: FindMany,
+  context: any,
+  generateInputsForProving: Function,
+  assertState: Function
+) {
+
+  console.log('Syncing onchain and server state:');
+  const previousTransactionStatus = await waitForZkAppTransaction(pendingActions[0].pendingTransaction);
+
+  if (previousTransactionStatus === 'confirmed') {
+    const contextKey = getProperContextKey(context);
+
+    context[contextKey] += pendingActions.length;
+    for (const action of pendingActions) {
+      await generateInputsForProving(action);
+    }
+
+    await assertState(pendingActions, pendingActions[0].pendingBlockHeight!);
+    return true; // Continue loop
+  }
+  return false; // Proceed with new actions
+}
+
+async function toTransitionsAndProofs(
+  transitionAndProof: TransitionsAndProofsAsStrings
+) {
+  const parsedTransition = JSON.parse(transitionAndProof.transition);
+  const parsedProof = JSON.parse(transitionAndProof.proof);
+
+  if (parsedTransition.initialPosts !== undefined) {
+    return {
+      transition: PostsTransition.fromJSON(parsedTransition),
+      proof: await PostsProof.fromJSON(parsedProof),
+    };
+  } else if (parsedTransition.initialReactions !== undefined) {
+    return {
+      transition: ReactionsTransition.fromJSON(parsedTransition),
+      proof: await ReactionsProof.fromJSON(parsedProof),
+    };
+  } else if (parsedTransition.initialComments !== undefined) {
+    return {
+      transition: CommentsTransition.fromJSON(parsedTransition),
+      proof: await CommentsProof.fromJSON(parsedProof),
+    };
+  } else if (parsedTransition.initialReposts !== undefined) {
+    return {
+      transition: RepostsTransition.fromJSON(parsedTransition),
+      proof: await RepostsProof.fromJSON(parsedProof),
+    };
+  }
+
+  throw new Error('Unknown transition type');
+}
+
+async function confirmTransaction(pendingTransaction: Mina.PendingTransaction) {
+  startTime = performance.now();
+  console.log('Confirming transaction...');
+  let status = 'pending';
+  while (status === 'pending') {
+    status = await getTransactionStatus(pendingTransaction);
+  }
+  endTime = performance.now();
+  console.log(`Waited ${(endTime - startTime)/1000/60} minutes for transaction confirmation or rejection`);
+  return status;
+}
+
+async function processPendingActions(
+  context: any,
+  pendingActions: FindMany,
+  generateInputsForProving: Function,
+  queue: any, queueEvents: any,
+  updateOnChainState: Function,
+  model: any,
+  assertState: Function,
+  resetState: Function
+) {
+  const contextKey = getProperContextKey(context);
+  context[contextKey] += pendingActions.length;
+  const lastBlock = await fetchLastBlock(configPosts.url);
+  const currentBlockHeight = lastBlock.blockchainLength.toBigint();
+  const inputsForProving: any[] = [];
+
+  for (const action of pendingActions) {
+    const result = await generateInputsForProving(action, currentBlockHeight);
+    inputsForProving.push(result);
+  }
+
+  const jobsPromises: Promise<any>[] = [];
+  for (const inputs of inputsForProving) {
+    const job = await queue.add(
+      `job`,
+      { inputs: inputs }
+    );
+    jobsPromises.push(job.waitUntilFinished(queueEvents));
+  }
+
+  const transitionsAndProofsAsStrings: TransitionsAndProofsAsStrings[] = await Promise.all(jobsPromises);
+  const transitionsAndProofs: TransitionsAndProofs[] = [];
+  for (const transitionAndProof of transitionsAndProofsAsStrings) {
+    transitionsAndProofs.push(await toTransitionsAndProofs(transitionAndProof));
+  }
+
+  await updateActionStatus(model, pendingActions, currentBlockHeight);
+  const pendingTransaction = await updateOnChainState(transitionsAndProofs);
+  await updateTransactionHash(model, pendingActions, pendingTransaction.hash);
+
+  const status = await confirmTransaction(pendingTransaction);
+
+  if (status === 'rejected') {
+    await resetState(pendingActions);
+    return false;
+  }
+
+  await assertState(pendingActions, currentBlockHeight);
+  return true;
+}
