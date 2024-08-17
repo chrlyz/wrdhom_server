@@ -290,11 +290,11 @@ while (true) {
     let pendingComments: CommentsFindMany;
 
     // Get actions that may have a pending associated transaction
-    pendingComments = await getPendingActions(prisma.reactions, 'allReactionsCounter', 'creating');
+    pendingComments = await getPendingActions(prisma.comments, 'allCommentsCounter', 'creating');
 
     // If there isn't a pending transaction, process new actions
     if (pendingComments.length === 0) {
-      pendingComments = await getPendingActions(prisma.reactions, 'allReactionsCounter', 'create');
+      pendingComments = await getPendingActions(prisma.comments, 'allCommentsCounter', 'create');
       // Handle possible pending transaction confirmation or failure
     } else {
       const confirmed = await handlePendingTransaction(
