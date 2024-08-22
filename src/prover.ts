@@ -2730,9 +2730,11 @@ async function getPendingActions(model: any, allActionsCounter: string, status: 
   });
 }
 
+type ActionKey = 'postKey' | 'reactionKey' | 'commentKey' | 'repostKey';
+
 function getProperActionKey(pendingAction: FindUnique) {
-  const possibleKeys = ['postKey', 'reactionKey', 'commentKey', 'repostKey'] as const;
-  let actionKey: typeof possibleKeys[number] | undefined;
+  const possibleKeys: readonly ActionKey[] = ['postKey', 'reactionKey', 'commentKey', 'repostKey'];
+  let actionKey: ActionKey | undefined;
   
   for (const key of possibleKeys) {
     if (key in pendingAction!) {
@@ -2768,27 +2770,27 @@ async function updateTransactionHash(
 
 async function updateActionStatus(
   model: any,
-  pendingActions: FindMany,
+  pendingAction: FindUnique,
   currentBlockHeight: bigint,
-  status: status_enum
+  status: status_enum,
 ) {
-  const actionKey = getProperActionKey(pendingActions[0]);
-  for (const pendingAction of pendingActions) {
-    pendingAction.status = status;
-    await model.update({
-      where: {
-        [actionKey]: pendingAction[actionKey as keyof typeof pendingAction]
-      },
-      data: {
-        status: status,
-        pendingBlockHeight: currentBlockHeight
-      }
-    });
-  }
+  const actionKey = getProperActionKey(pendingAction);
+  pendingAction!.status = status;
+  await model.update({
+    where: {
+      [actionKey]: pendingAction![actionKey as keyof typeof pendingAction]
+    },
+    data: {
+      status: status,
+      pendingBlockHeight: currentBlockHeight
+    }
+  });
 }
 
+type ContextKey = 'totalNumberOfPosts' | 'totalNumberOfReactions' | 'totalNumberOfComments' | 'totalNumberOfReposts';
+
 function getProperContextKey(context: any) {
-  const possibleKeys = ['totalNumberOfPosts', 'totalNumberOfReactions', 'totalNumberOfComments', 'totalNumberOfReposts'] as const;
+  const possibleKeys: readonly ContextKey[] = ['totalNumberOfPosts', 'totalNumberOfReactions', 'totalNumberOfComments', 'totalNumberOfReposts'];
   let contextKey: typeof possibleKeys[number] | undefined;
   
   for (const key of possibleKeys) {
@@ -2816,17 +2818,19 @@ async function handlePendingTransaction(
   console.log('Syncing onchain and server state...');
   const previousTransactionStatus = await waitForZkAppTransaction(pendingActions[0].pendingTransaction);
 
+  // Check if the transaction was successfully confirmed
   if (previousTransactionStatus === 'confirmed') {
     const contextKey = getProperContextKey(context);
-
     if (actionStatus === 'creating') {
       context[contextKey] += pendingActions.length;
     }
 
+    // Update server state
     for (const action of pendingActions) {
       await generateInputsForProving(action);
     }
 
+    // Update database if onchain state matches updated server state
     await assertState(pendingActions, pendingActions[0].pendingBlockHeight!);
     return true;
   }
@@ -2900,6 +2904,7 @@ async function processPendingActions(
   for (const action of pendingActions) {
     const result = await generateInputsForProving(action, currentBlockHeight);
     inputsForProving.push(result);
+    await updateActionStatus(model, action, currentBlockHeight, actionStatus);
   }
 
   const jobsPromises: Promise<any>[] = [];
@@ -2917,7 +2922,6 @@ async function processPendingActions(
     transitionsAndProofs.push(await toTransitionsAndProofs(transitionAndProof));
   }
 
-  await updateActionStatus(model, pendingActions, currentBlockHeight, actionStatus);
   const pendingTransaction = await updateOnChainState(transitionsAndProofs);
   await updateTransactionHash(model, pendingActions, pendingTransaction.hash);
 
