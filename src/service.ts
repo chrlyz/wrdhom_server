@@ -1611,7 +1611,7 @@ server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
 
 server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
   try {
-    const { howMany, fromBlock, toBlock, reposterAddress, repostKey } = request.query;
+    const { howMany, fromBlock, toBlock, profileAddress, repostKey } = request.query;
 
     if (repostKey !== undefined) {
       const repost = await prisma.reposts.findUnique({
@@ -1639,7 +1639,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
     let numberOfDeletedReposts: number;
     let reposts: Prisma.PromiseReturnType<typeof prisma.reposts.findMany>;
 
-    if (reposterAddress === undefined) {
+    if (profileAddress === undefined) {
 
       numberOfDeletedReposts = (await prisma.reposts.findMany({
         take: Number(howMany),
@@ -1680,7 +1680,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
           allRepostsCounter: 'desc'
         },
         where: {
-          reposterAddress: reposterAddress,
+          reposterAddress: profileAddress,
           repostBlockHeight: {
             not: 0,
             gte: fromBlock,
@@ -1955,7 +1955,7 @@ interface RepostQuery {
   howMany: number,
   fromBlock: number,
   toBlock: number,
-  reposterAddress: string,
+  profileAddress: string,
   repostKey: string
 }
 
