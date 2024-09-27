@@ -2037,322 +2037,342 @@ type FindUnique = PostsFindUnique | CommentsFindUnique | ReactionsFindUnique | R
 
 async function assertPostsOnchainAndServerState(pendingPosts: PostsFindMany, blockHeight: bigint) {
 
-  const allPostsCounterFetch = await postsContract.allPostsCounter.fetch();
-  console.log('allPostsCounterFetch: ' + allPostsCounterFetch!.toString());
-  const usersPostsCountersFetch = await postsContract.usersPostsCounters.fetch();
-  console.log('usersPostsCountersFetch: ' + usersPostsCountersFetch!.toString());
-  const postsFetch = await postsContract.posts.fetch();
-  console.log('postsFetch: ' + postsFetch!.toString());
-
-  const allPostsCounterAfter = Field(postsContext.totalNumberOfPosts);
-  console.log('allPostsCounterAfter: ' + allPostsCounterAfter.toString());
-  const usersPostsCountersAfter = usersPostsCountersMap.getRoot();
-  console.log('usersPostsCountersAfter: ' + usersPostsCountersAfter.toString());
-  const postsAfter = postsMap.getRoot();
-  console.log('postsAfter: ' + postsAfter.toString());
-
-  const allPostsCounterEqual = allPostsCounterFetch!.equals(allPostsCounterAfter).toBoolean();
-  console.log('allPostsCounterEqual: ' + allPostsCounterEqual);
-  const usersPostsCountersEqual = usersPostsCountersFetch!.equals(usersPostsCountersAfter).toBoolean();
-  console.log('usersPostsCountersEqual: ' + usersPostsCountersEqual);
-  const postsEqual = postsFetch!.equals(postsAfter).toBoolean();
-  console.log('postsEqual: ' + postsEqual);
-
-  const isUpdated = allPostsCounterEqual && usersPostsCountersEqual && postsEqual;
-
-  if (isUpdated) {
-    for (const pPost of pendingPosts) {
-      if (pPost.status === 'creating') {
-        await prisma.posts.update({
-          where: {
-            postKey: pPost.postKey
-          },
-          data: {
-            postBlockHeight: blockHeight,
-            status: 'loading',
-            pendingBlockHeight: null,
-            pendingSignature: null,
-            pendingTransaction: null
-          }
-        });
-      } else if (pPost.status === 'deleting') {
-        await prisma.posts.update({
-          where: {
-            postKey: pPost.postKey
-          },
-          data: {
-            deletionBlockHeight: blockHeight,
-            status: 'loading',
-            pendingBlockHeight: null,
-            pendingSignature: null,
-            pendingTransaction: null
-          }
-        });
-      } else if (pPost.status === 'restoring') {
-        await prisma.posts.update({
-          where: {
-            postKey: pPost.postKey
-          },
-          data: {
-            deletionBlockHeight: 0,
-            restorationBlockHeight: blockHeight,
-            status: 'loading',
-            pendingBlockHeight: null,
-            pendingSignature: null,
-            pendingTransaction: null
-          }
-        });
+  let isUpdated = false;
+  let attempts = 0;
+  while (!isUpdated && attempts < MAX_ATTEMPTS) {
+    const allPostsCounterFetch = await postsContract.allPostsCounter.fetch();
+    console.log('allPostsCounterFetch: ' + allPostsCounterFetch!.toString());
+    const usersPostsCountersFetch = await postsContract.usersPostsCounters.fetch();
+    console.log('usersPostsCountersFetch: ' + usersPostsCountersFetch!.toString());
+    const postsFetch = await postsContract.posts.fetch();
+    console.log('postsFetch: ' + postsFetch!.toString());
+  
+    const allPostsCounterAfter = Field(postsContext.totalNumberOfPosts);
+    console.log('allPostsCounterAfter: ' + allPostsCounterAfter.toString());
+    const usersPostsCountersAfter = usersPostsCountersMap.getRoot();
+    console.log('usersPostsCountersAfter: ' + usersPostsCountersAfter.toString());
+    const postsAfter = postsMap.getRoot();
+    console.log('postsAfter: ' + postsAfter.toString());
+  
+    const allPostsCounterEqual = allPostsCounterFetch!.equals(allPostsCounterAfter).toBoolean();
+    console.log('allPostsCounterEqual: ' + allPostsCounterEqual);
+    const usersPostsCountersEqual = usersPostsCountersFetch!.equals(usersPostsCountersAfter).toBoolean();
+    console.log('usersPostsCountersEqual: ' + usersPostsCountersEqual);
+    const postsEqual = postsFetch!.equals(postsAfter).toBoolean();
+    console.log('postsEqual: ' + postsEqual);
+  
+    isUpdated = allPostsCounterEqual && usersPostsCountersEqual && postsEqual;
+    attempts += 1;
+  
+    if (isUpdated) {
+      for (const pPost of pendingPosts) {
+        if (pPost.status === 'creating') {
+          await prisma.posts.update({
+            where: {
+              postKey: pPost.postKey
+            },
+            data: {
+              postBlockHeight: blockHeight,
+              status: 'loading',
+              pendingBlockHeight: null,
+              pendingSignature: null,
+              pendingTransaction: null
+            }
+          });
+        } else if (pPost.status === 'deleting') {
+          await prisma.posts.update({
+            where: {
+              postKey: pPost.postKey
+            },
+            data: {
+              deletionBlockHeight: blockHeight,
+              status: 'loading',
+              pendingBlockHeight: null,
+              pendingSignature: null,
+              pendingTransaction: null
+            }
+          });
+        } else if (pPost.status === 'restoring') {
+          await prisma.posts.update({
+            where: {
+              postKey: pPost.postKey
+            },
+            data: {
+              deletionBlockHeight: 0,
+              restorationBlockHeight: blockHeight,
+              status: 'loading',
+              pendingBlockHeight: null,
+              pendingSignature: null,
+              pendingTransaction: null
+            }
+          });
+        }
       }
+      return;
     }
-  } else {
-    throw new OnchainAndServerStateMismatchError('There is a mismatch between Posts onchain and server state');
   }
+  throw new OnchainAndServerStateMismatchError('There is a mismatch between Posts onchain and server state');
 }
 
 // ============================================================================
 
 async function assertCommentsOnchainAndServerState(pendingComments: CommentsFindMany, blockHeight: bigint) {
 
-  const allCommentsCounterFetch = await commentsContract.allCommentsCounter.fetch();
-  console.log('allCommentsCounterFetch: ' + allCommentsCounterFetch!.toString());
-  const usersCommentsCountersFetch = await commentsContract.usersCommentsCounters.fetch();
-  console.log('usersCommentsCountersFetch: ' + usersCommentsCountersFetch!.toString());
-  const targetsCommentsCountersFetch = await commentsContract.targetsCommentsCounters.fetch();
-  console.log('targetsCommentsCountersFetch: ' + targetsCommentsCountersFetch!.toString());
-  const commentsFetch = await commentsContract.comments.fetch();
-  console.log('commentsFetch: ' + commentsFetch!.toString());
-
-  const allCommentsCounterAfter = Field(commentsContext.totalNumberOfComments);
-  console.log('allCommentsCounterAfter: ' + allCommentsCounterAfter.toString());
-  const usersCommentsCountersAfter = usersCommentsCountersMap.getRoot();
-  console.log('usersCommentsCountersAfter: ' + usersCommentsCountersAfter.toString());
-  const targetsCommentsCountersAfter = targetsCommentsCountersMap.getRoot();
-  console.log('targetsCommentsCountersAfter: ' + targetsCommentsCountersAfter.toString());
-  const commentsAfter = commentsMap.getRoot();
-  console.log('commentsAfter: ' + commentsAfter.toString());
-
-  const allCommentsCounterEqual = allCommentsCounterFetch!.equals(allCommentsCounterAfter).toBoolean();
-  console.log('allCommentsCounterEqual: ' + allCommentsCounterEqual);
-  const usersCommentsCountersEqual = usersCommentsCountersFetch!.equals(usersCommentsCountersAfter).toBoolean();
-  console.log('usersCommentsCountersEqual: ' + usersCommentsCountersEqual);
-  const targetsCommentsCountersEqual = targetsCommentsCountersFetch!.equals(targetsCommentsCountersAfter).toBoolean();
-  console.log('targetsCommentsCountersEqual: ' + targetsCommentsCountersEqual);
-  const commentsEqual = commentsFetch!.equals(commentsAfter).toBoolean();
-  console.log('commentsEqual: ' + commentsEqual);
-
-  const isUpdated = allCommentsCounterEqual && usersCommentsCountersEqual && targetsCommentsCountersEqual && commentsEqual;
-
-  if (isUpdated) {
-    for (const pComment of pendingComments) {
-      if (pComment.status === 'creating') {
-        await prisma.comments.update({
-          where: {
-            commentKey: pComment.commentKey
-          },
-          data: {
-            commentBlockHeight: blockHeight,
-            status: 'loading',
-            pendingBlockHeight: null,
-            pendingSignature: null,
-            pendingTransaction: null
-          }
-        });
-      } else if (pComment.status === 'deleting') {
-        await prisma.comments.update({
-          where: {
-            commentKey: pComment.commentKey
-          },
-          data: {
-            deletionBlockHeight: blockHeight,
-            status: 'loading',
-            pendingBlockHeight: null,
-            pendingSignature: null,
-            pendingTransaction: null
-          }
-        });
-      } else if (pComment.status === 'restoring') {
-        await prisma.comments.update({
-          where: {
-            commentKey: pComment.commentKey
-          },
-          data: {
-            deletionBlockHeight: 0,
-            restorationBlockHeight: blockHeight,
-            status: 'loading',
-            pendingBlockHeight: null,
-            pendingSignature: null,
-            pendingTransaction: null
-          }
-        });
+  let isUpdated = false;
+  let attempts = 0;
+  while (!isUpdated && attempts < MAX_ATTEMPTS) {
+    const allCommentsCounterFetch = await commentsContract.allCommentsCounter.fetch();
+    console.log('allCommentsCounterFetch: ' + allCommentsCounterFetch!.toString());
+    const usersCommentsCountersFetch = await commentsContract.usersCommentsCounters.fetch();
+    console.log('usersCommentsCountersFetch: ' + usersCommentsCountersFetch!.toString());
+    const targetsCommentsCountersFetch = await commentsContract.targetsCommentsCounters.fetch();
+    console.log('targetsCommentsCountersFetch: ' + targetsCommentsCountersFetch!.toString());
+    const commentsFetch = await commentsContract.comments.fetch();
+    console.log('commentsFetch: ' + commentsFetch!.toString());
+  
+    const allCommentsCounterAfter = Field(commentsContext.totalNumberOfComments);
+    console.log('allCommentsCounterAfter: ' + allCommentsCounterAfter.toString());
+    const usersCommentsCountersAfter = usersCommentsCountersMap.getRoot();
+    console.log('usersCommentsCountersAfter: ' + usersCommentsCountersAfter.toString());
+    const targetsCommentsCountersAfter = targetsCommentsCountersMap.getRoot();
+    console.log('targetsCommentsCountersAfter: ' + targetsCommentsCountersAfter.toString());
+    const commentsAfter = commentsMap.getRoot();
+    console.log('commentsAfter: ' + commentsAfter.toString());
+  
+    const allCommentsCounterEqual = allCommentsCounterFetch!.equals(allCommentsCounterAfter).toBoolean();
+    console.log('allCommentsCounterEqual: ' + allCommentsCounterEqual);
+    const usersCommentsCountersEqual = usersCommentsCountersFetch!.equals(usersCommentsCountersAfter).toBoolean();
+    console.log('usersCommentsCountersEqual: ' + usersCommentsCountersEqual);
+    const targetsCommentsCountersEqual = targetsCommentsCountersFetch!.equals(targetsCommentsCountersAfter).toBoolean();
+    console.log('targetsCommentsCountersEqual: ' + targetsCommentsCountersEqual);
+    const commentsEqual = commentsFetch!.equals(commentsAfter).toBoolean();
+    console.log('commentsEqual: ' + commentsEqual);
+  
+    isUpdated = allCommentsCounterEqual && usersCommentsCountersEqual && targetsCommentsCountersEqual && commentsEqual;
+    attempts += 1;
+  
+    if (isUpdated) {
+      for (const pComment of pendingComments) {
+        if (pComment.status === 'creating') {
+          await prisma.comments.update({
+            where: {
+              commentKey: pComment.commentKey
+            },
+            data: {
+              commentBlockHeight: blockHeight,
+              status: 'loading',
+              pendingBlockHeight: null,
+              pendingSignature: null,
+              pendingTransaction: null
+            }
+          });
+        } else if (pComment.status === 'deleting') {
+          await prisma.comments.update({
+            where: {
+              commentKey: pComment.commentKey
+            },
+            data: {
+              deletionBlockHeight: blockHeight,
+              status: 'loading',
+              pendingBlockHeight: null,
+              pendingSignature: null,
+              pendingTransaction: null
+            }
+          });
+        } else if (pComment.status === 'restoring') {
+          await prisma.comments.update({
+            where: {
+              commentKey: pComment.commentKey
+            },
+            data: {
+              deletionBlockHeight: 0,
+              restorationBlockHeight: blockHeight,
+              status: 'loading',
+              pendingBlockHeight: null,
+              pendingSignature: null,
+              pendingTransaction: null
+            }
+          });
+        }
       }
+      return;
     }
-  } else {
-    throw new OnchainAndServerStateMismatchError('There is a mismatch between Comments onchain and server state');
   }
+  throw new OnchainAndServerStateMismatchError('There is a mismatch between Comments onchain and server state');
 }
 
 // ============================================================================
 
 async function assertReactionsOnchainAndServerState(pendingReactions: ReactionsFindMany, blockHeight: bigint) {
 
-  const allReactionsCounterFetch = await reactionsContract.allReactionsCounter.fetch();
-  console.log('allReactionsCounterFetch: ' + allReactionsCounterFetch!.toString());
-  const usersReactionsCountersFetch = await reactionsContract.usersReactionsCounters.fetch();
-  console.log('usersReactionsCountersFetch: ' + usersReactionsCountersFetch!.toString());
-  const targetsReactionsCountersFetch = await reactionsContract.targetsReactionsCounters.fetch();
-  console.log('targetsReactionsCountersFetch: ' + targetsReactionsCountersFetch!.toString());
-  const reactionsFetch = await reactionsContract.reactions.fetch();
-  console.log('reactionsFetch: ' + reactionsFetch!.toString());
-
-  const allReactionsCounterAfter = Field(reactionsContext.totalNumberOfReactions);
-  console.log('allReactionsCounterAfter: ' + allReactionsCounterAfter.toString());
-  const usersReactionsCountersAfter = usersReactionsCountersMap.getRoot();
-  console.log('usersReactionsCountersAfter: ' + usersReactionsCountersAfter.toString());
-  const targetsReactionsCountersAfter = targetsReactionsCountersMap.getRoot();
-  console.log('targetsReactionsCountersAfter: ' + targetsReactionsCountersAfter.toString());
-  const reactionsAfter = reactionsMap.getRoot();
-  console.log('reactionsAfter: ' + reactionsAfter.toString());
-
-  const allReactionsCounterEqual = allReactionsCounterFetch!.equals(allReactionsCounterAfter).toBoolean();
-  console.log('allReactionsCounterEqual: ' + allReactionsCounterEqual);
-  const usersReactionsCountersEqual = usersReactionsCountersFetch!.equals(usersReactionsCountersAfter).toBoolean();
-  console.log('usersReactionsCountersEqual: ' + usersReactionsCountersEqual);
-  const targetsReactionsCountersEqual = targetsReactionsCountersFetch!.equals(targetsReactionsCountersAfter).toBoolean();
-  console.log('targetsReactionsCountersEqual: ' + targetsReactionsCountersEqual);
-  const reactionsEqual = reactionsFetch!.equals(reactionsAfter).toBoolean();
-  console.log('reactionsEqual: ' + reactionsEqual);
-
-  const isUpdated = allReactionsCounterEqual && usersReactionsCountersEqual && targetsReactionsCountersEqual && reactionsEqual;
-
-  if (isUpdated) {
-    for (const pReaction of pendingReactions) {
-      if (pReaction.status === 'creating') {
-        await prisma.reactions.update({
-          where: {
-            reactionKey: pReaction.reactionKey
-          },
-          data: {
-            reactionBlockHeight: blockHeight,
-            status: 'loading',
-            pendingBlockHeight: null,
-            pendingSignature: null,
-            pendingTransaction: null
-          }
-        });
-      } else if (pReaction.status === 'deleting') {
-        await prisma.reactions.update({
-          where: {
-            reactionKey: pReaction.reactionKey
-          },
-          data: {
-            deletionBlockHeight: blockHeight,
-            status: 'loading',
-            pendingBlockHeight: null,
-            pendingSignature: null,
-            pendingTransaction: null
-          }
-        });
-      } else if (pReaction.status === 'restoring') {
-        await prisma.reactions.update({
-          where: {
-            reactionKey: pReaction.reactionKey
-          },
-          data: {
-            deletionBlockHeight: 0,
-            restorationBlockHeight: blockHeight,
-            status: 'loading',
-            pendingBlockHeight: null,
-            pendingSignature: null,
-            pendingTransaction: null
-          }
-        });
+  let isUpdated = false;
+  let attempts = 0;
+  while (!isUpdated && attempts < MAX_ATTEMPTS) {
+    const allReactionsCounterFetch = await reactionsContract.allReactionsCounter.fetch();
+    console.log('allReactionsCounterFetch: ' + allReactionsCounterFetch!.toString());
+    const usersReactionsCountersFetch = await reactionsContract.usersReactionsCounters.fetch();
+    console.log('usersReactionsCountersFetch: ' + usersReactionsCountersFetch!.toString());
+    const targetsReactionsCountersFetch = await reactionsContract.targetsReactionsCounters.fetch();
+    console.log('targetsReactionsCountersFetch: ' + targetsReactionsCountersFetch!.toString());
+    const reactionsFetch = await reactionsContract.reactions.fetch();
+    console.log('reactionsFetch: ' + reactionsFetch!.toString());
+  
+    const allReactionsCounterAfter = Field(reactionsContext.totalNumberOfReactions);
+    console.log('allReactionsCounterAfter: ' + allReactionsCounterAfter.toString());
+    const usersReactionsCountersAfter = usersReactionsCountersMap.getRoot();
+    console.log('usersReactionsCountersAfter: ' + usersReactionsCountersAfter.toString());
+    const targetsReactionsCountersAfter = targetsReactionsCountersMap.getRoot();
+    console.log('targetsReactionsCountersAfter: ' + targetsReactionsCountersAfter.toString());
+    const reactionsAfter = reactionsMap.getRoot();
+    console.log('reactionsAfter: ' + reactionsAfter.toString());
+  
+    const allReactionsCounterEqual = allReactionsCounterFetch!.equals(allReactionsCounterAfter).toBoolean();
+    console.log('allReactionsCounterEqual: ' + allReactionsCounterEqual);
+    const usersReactionsCountersEqual = usersReactionsCountersFetch!.equals(usersReactionsCountersAfter).toBoolean();
+    console.log('usersReactionsCountersEqual: ' + usersReactionsCountersEqual);
+    const targetsReactionsCountersEqual = targetsReactionsCountersFetch!.equals(targetsReactionsCountersAfter).toBoolean();
+    console.log('targetsReactionsCountersEqual: ' + targetsReactionsCountersEqual);
+    const reactionsEqual = reactionsFetch!.equals(reactionsAfter).toBoolean();
+    console.log('reactionsEqual: ' + reactionsEqual);
+  
+    isUpdated = allReactionsCounterEqual && usersReactionsCountersEqual && targetsReactionsCountersEqual && reactionsEqual;
+    attempts += 1;
+  
+    if (isUpdated) {
+      for (const pReaction of pendingReactions) {
+        if (pReaction.status === 'creating') {
+          await prisma.reactions.update({
+            where: {
+              reactionKey: pReaction.reactionKey
+            },
+            data: {
+              reactionBlockHeight: blockHeight,
+              status: 'loading',
+              pendingBlockHeight: null,
+              pendingSignature: null,
+              pendingTransaction: null
+            }
+          });
+        } else if (pReaction.status === 'deleting') {
+          await prisma.reactions.update({
+            where: {
+              reactionKey: pReaction.reactionKey
+            },
+            data: {
+              deletionBlockHeight: blockHeight,
+              status: 'loading',
+              pendingBlockHeight: null,
+              pendingSignature: null,
+              pendingTransaction: null
+            }
+          });
+        } else if (pReaction.status === 'restoring') {
+          await prisma.reactions.update({
+            where: {
+              reactionKey: pReaction.reactionKey
+            },
+            data: {
+              deletionBlockHeight: 0,
+              restorationBlockHeight: blockHeight,
+              status: 'loading',
+              pendingBlockHeight: null,
+              pendingSignature: null,
+              pendingTransaction: null
+            }
+          });
+        }
       }
+      return;
     }
-  } else {
-    throw new OnchainAndServerStateMismatchError('There is a mismatch between Reactions onchain and server state');
   }
+  throw new OnchainAndServerStateMismatchError('There is a mismatch between Reactions onchain and server state');
 }
 
 // ============================================================================
 
 async function assertRepostsOnchainAndServerState(pendingReposts: RepostsFindMany, blockHeight: bigint) {
 
-  const allRepostsCounterFetch = await repostsContract.allRepostsCounter.fetch();
-  console.log('allRepostsCounterFetch: ' + allRepostsCounterFetch!.toString());
-  const usersRepostsCountersFetch = await repostsContract.usersRepostsCounters.fetch();
-  console.log('usersRepostsCountersFetch: ' + usersRepostsCountersFetch!.toString());
-  const targetsRepostsCountersFetch = await repostsContract.targetsRepostsCounters.fetch();
-  console.log('targetsRepostsCountersFetch: ' + targetsRepostsCountersFetch!.toString());
-  const repostsFetch = await repostsContract.reposts.fetch();
-  console.log('repostsFetch: ' + repostsFetch!.toString());
-
-  const allRepostsCounterAfter = Field(repostsContext.totalNumberOfReposts);
-  console.log('allRepostsCounterAfter: ' + allRepostsCounterAfter.toString());
-  const usersRepostsCountersAfter = usersRepostsCountersMap.getRoot();
-  console.log('usersRepostsCountersAfter: ' + usersRepostsCountersAfter.toString());
-  const targetsRepostsCountersAfter = targetsRepostsCountersMap.getRoot();
-  console.log('targetsRepostsCountersAfter: ' + targetsRepostsCountersAfter.toString());
-  const repostsAfter = repostsMap.getRoot();
-  console.log('repostsAfter: ' + repostsAfter.toString());
-
-  const allRepostsCounterEqual = allRepostsCounterFetch!.equals(allRepostsCounterAfter).toBoolean();
-  console.log('allRepostsCounterEqual: ' + allRepostsCounterEqual);
-  const usersRepostsCountersEqual = usersRepostsCountersFetch!.equals(usersRepostsCountersAfter).toBoolean();
-  console.log('usersRepostsCountersEqual: ' + usersRepostsCountersEqual);
-  const targetsRepostsCountersEqual = targetsRepostsCountersFetch!.equals(targetsRepostsCountersAfter).toBoolean();
-  console.log('targetsRepostsCountersEqual: ' + targetsRepostsCountersEqual);
-  const repostsEqual = repostsFetch!.equals(repostsAfter).toBoolean();
-  console.log('repostsEqual: ' + repostsEqual);
-
-  const isUpdated = allRepostsCounterEqual && usersRepostsCountersEqual && targetsRepostsCountersEqual && repostsEqual;
-
-  if (isUpdated) {
-    for (const pRepost of pendingReposts) {
-      if (pRepost.status === 'creating') {
-        await prisma.reposts.update({
-          where: {
-            repostKey: pRepost.repostKey
-          },
-          data: {
-            repostBlockHeight: blockHeight,
-            status: 'loading',
-            pendingBlockHeight: null,
-            pendingSignature: null,
-            pendingTransaction: null
-          }
-        });
-      } else if (pRepost.status === 'deleting') {
-        await prisma.reposts.update({
-          where: {
-            repostKey: pRepost.repostKey
-          },
-          data: {
-            deletionBlockHeight: blockHeight,
-            status: 'loading',
-            pendingBlockHeight: null,
-            pendingSignature: null,
-            pendingTransaction: null
-          }
-        });
-      } else if (pRepost.status === 'restoring') {
-        await prisma.reposts.update({
-          where: {
-            repostKey: pRepost.repostKey
-          },
-          data: {
-            deletionBlockHeight: 0,
-            restorationBlockHeight: blockHeight,
-            status: 'loading',
-            pendingBlockHeight: null,
-            pendingSignature: null,
-            pendingTransaction: null
-          }
-        });
+  let isUpdated = false;
+  let attempts = 0;
+  while (!isUpdated && attempts < MAX_ATTEMPTS) {
+    const allRepostsCounterFetch = await repostsContract.allRepostsCounter.fetch();
+    console.log('allRepostsCounterFetch: ' + allRepostsCounterFetch!.toString());
+    const usersRepostsCountersFetch = await repostsContract.usersRepostsCounters.fetch();
+    console.log('usersRepostsCountersFetch: ' + usersRepostsCountersFetch!.toString());
+    const targetsRepostsCountersFetch = await repostsContract.targetsRepostsCounters.fetch();
+    console.log('targetsRepostsCountersFetch: ' + targetsRepostsCountersFetch!.toString());
+    const repostsFetch = await repostsContract.reposts.fetch();
+    console.log('repostsFetch: ' + repostsFetch!.toString());
+  
+    const allRepostsCounterAfter = Field(repostsContext.totalNumberOfReposts);
+    console.log('allRepostsCounterAfter: ' + allRepostsCounterAfter.toString());
+    const usersRepostsCountersAfter = usersRepostsCountersMap.getRoot();
+    console.log('usersRepostsCountersAfter: ' + usersRepostsCountersAfter.toString());
+    const targetsRepostsCountersAfter = targetsRepostsCountersMap.getRoot();
+    console.log('targetsRepostsCountersAfter: ' + targetsRepostsCountersAfter.toString());
+    const repostsAfter = repostsMap.getRoot();
+    console.log('repostsAfter: ' + repostsAfter.toString());
+  
+    const allRepostsCounterEqual = allRepostsCounterFetch!.equals(allRepostsCounterAfter).toBoolean();
+    console.log('allRepostsCounterEqual: ' + allRepostsCounterEqual);
+    const usersRepostsCountersEqual = usersRepostsCountersFetch!.equals(usersRepostsCountersAfter).toBoolean();
+    console.log('usersRepostsCountersEqual: ' + usersRepostsCountersEqual);
+    const targetsRepostsCountersEqual = targetsRepostsCountersFetch!.equals(targetsRepostsCountersAfter).toBoolean();
+    console.log('targetsRepostsCountersEqual: ' + targetsRepostsCountersEqual);
+    const repostsEqual = repostsFetch!.equals(repostsAfter).toBoolean();
+    console.log('repostsEqual: ' + repostsEqual);
+  
+    isUpdated = allRepostsCounterEqual && usersRepostsCountersEqual && targetsRepostsCountersEqual && repostsEqual;
+    attempts += 1;
+  
+    if (isUpdated) {
+      for (const pRepost of pendingReposts) {
+        if (pRepost.status === 'creating') {
+          await prisma.reposts.update({
+            where: {
+              repostKey: pRepost.repostKey
+            },
+            data: {
+              repostBlockHeight: blockHeight,
+              status: 'loading',
+              pendingBlockHeight: null,
+              pendingSignature: null,
+              pendingTransaction: null
+            }
+          });
+        } else if (pRepost.status === 'deleting') {
+          await prisma.reposts.update({
+            where: {
+              repostKey: pRepost.repostKey
+            },
+            data: {
+              deletionBlockHeight: blockHeight,
+              status: 'loading',
+              pendingBlockHeight: null,
+              pendingSignature: null,
+              pendingTransaction: null
+            }
+          });
+        } else if (pRepost.status === 'restoring') {
+          await prisma.reposts.update({
+            where: {
+              repostKey: pRepost.repostKey
+            },
+            data: {
+              deletionBlockHeight: 0,
+              restorationBlockHeight: blockHeight,
+              status: 'loading',
+              pendingBlockHeight: null,
+              pendingSignature: null,
+              pendingTransaction: null
+            }
+          });
+        }
       }
+      return;
     }
-  } else {
-    throw new OnchainAndServerStateMismatchError('There is a mismatch between Reposts onchain and server state');
   }
+  throw new OnchainAndServerStateMismatchError('There is a mismatch between Reposts onchain and server state');
 }
 
 // ============================================================================
