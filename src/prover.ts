@@ -2065,49 +2065,51 @@ async function assertPostsOnchainAndServerState(pendingPosts: PostsFindMany, blo
     attempts += 1;
   
     if (isUpdated) {
-      for (const pPost of pendingPosts) {
-        if (pPost.status === 'creating') {
-          await prisma.posts.update({
-            where: {
-              postKey: pPost.postKey
-            },
-            data: {
-              postBlockHeight: blockHeight,
-              status: 'loading',
-              pendingBlockHeight: null,
-              pendingSignature: null,
-              pendingTransaction: null
-            }
-          });
-        } else if (pPost.status === 'deleting') {
-          await prisma.posts.update({
-            where: {
-              postKey: pPost.postKey
-            },
-            data: {
-              deletionBlockHeight: blockHeight,
-              status: 'loading',
-              pendingBlockHeight: null,
-              pendingSignature: null,
-              pendingTransaction: null
-            }
-          });
-        } else if (pPost.status === 'restoring') {
-          await prisma.posts.update({
-            where: {
-              postKey: pPost.postKey
-            },
-            data: {
-              deletionBlockHeight: 0,
-              restorationBlockHeight: blockHeight,
-              status: 'loading',
-              pendingBlockHeight: null,
-              pendingSignature: null,
-              pendingTransaction: null
-            }
-          });
+      await prisma.$transaction(async (prismaTransaction) => {
+        for (const pPost of pendingPosts) {
+          if (pPost.status === 'creating') {
+            await prismaTransaction.posts.update({
+              where: {
+                postKey: pPost.postKey
+              },
+              data: {
+                postBlockHeight: blockHeight,
+                status: 'loading',
+                pendingBlockHeight: null,
+                pendingSignature: null,
+                pendingTransaction: null
+              }
+            });
+          } else if (pPost.status === 'deleting') {
+            await prismaTransaction.posts.update({
+              where: {
+                postKey: pPost.postKey
+              },
+              data: {
+                deletionBlockHeight: blockHeight,
+                status: 'loading',
+                pendingBlockHeight: null,
+                pendingSignature: null,
+                pendingTransaction: null
+              }
+            });
+          } else if (pPost.status === 'restoring') {
+            await prismaTransaction.posts.update({
+              where: {
+                postKey: pPost.postKey
+              },
+              data: {
+                deletionBlockHeight: 0,
+                restorationBlockHeight: blockHeight,
+                status: 'loading',
+                pendingBlockHeight: null,
+                pendingSignature: null,
+                pendingTransaction: null
+              }
+            });
+          }
         }
-      }
+      });
       return;
     }
   }
@@ -2152,49 +2154,51 @@ async function assertCommentsOnchainAndServerState(pendingComments: CommentsFind
     attempts += 1;
   
     if (isUpdated) {
-      for (const pComment of pendingComments) {
-        if (pComment.status === 'creating') {
-          await prisma.comments.update({
-            where: {
-              commentKey: pComment.commentKey
-            },
-            data: {
-              commentBlockHeight: blockHeight,
-              status: 'loading',
-              pendingBlockHeight: null,
-              pendingSignature: null,
-              pendingTransaction: null
-            }
-          });
-        } else if (pComment.status === 'deleting') {
-          await prisma.comments.update({
-            where: {
-              commentKey: pComment.commentKey
-            },
-            data: {
-              deletionBlockHeight: blockHeight,
-              status: 'loading',
-              pendingBlockHeight: null,
-              pendingSignature: null,
-              pendingTransaction: null
-            }
-          });
-        } else if (pComment.status === 'restoring') {
-          await prisma.comments.update({
-            where: {
-              commentKey: pComment.commentKey
-            },
-            data: {
-              deletionBlockHeight: 0,
-              restorationBlockHeight: blockHeight,
-              status: 'loading',
-              pendingBlockHeight: null,
-              pendingSignature: null,
-              pendingTransaction: null
-            }
-          });
+      await prisma.$transaction(async (prismaTransaction) => {
+        for (const pComment of pendingComments) {
+          if (pComment.status === 'creating') {
+            await prismaTransaction.comments.update({
+              where: {
+                commentKey: pComment.commentKey
+              },
+              data: {
+                commentBlockHeight: blockHeight,
+                status: 'loading',
+                pendingBlockHeight: null,
+                pendingSignature: null,
+                pendingTransaction: null
+              }
+            });
+          } else if (pComment.status === 'deleting') {
+            await prismaTransaction.comments.update({
+              where: {
+                commentKey: pComment.commentKey
+              },
+              data: {
+                deletionBlockHeight: blockHeight,
+                status: 'loading',
+                pendingBlockHeight: null,
+                pendingSignature: null,
+                pendingTransaction: null
+              }
+            });
+          } else if (pComment.status === 'restoring') {
+            await prismaTransaction.comments.update({
+              where: {
+                commentKey: pComment.commentKey
+              },
+              data: {
+                deletionBlockHeight: 0,
+                restorationBlockHeight: blockHeight,
+                status: 'loading',
+                pendingBlockHeight: null,
+                pendingSignature: null,
+                pendingTransaction: null
+              }
+            });
+          }
         }
-      }
+      });
       return;
     }
   }
@@ -2239,49 +2243,51 @@ async function assertReactionsOnchainAndServerState(pendingReactions: ReactionsF
     attempts += 1;
   
     if (isUpdated) {
-      for (const pReaction of pendingReactions) {
-        if (pReaction.status === 'creating') {
-          await prisma.reactions.update({
-            where: {
-              reactionKey: pReaction.reactionKey
-            },
-            data: {
-              reactionBlockHeight: blockHeight,
-              status: 'loading',
-              pendingBlockHeight: null,
-              pendingSignature: null,
-              pendingTransaction: null
-            }
-          });
-        } else if (pReaction.status === 'deleting') {
-          await prisma.reactions.update({
-            where: {
-              reactionKey: pReaction.reactionKey
-            },
-            data: {
-              deletionBlockHeight: blockHeight,
-              status: 'loading',
-              pendingBlockHeight: null,
-              pendingSignature: null,
-              pendingTransaction: null
-            }
-          });
-        } else if (pReaction.status === 'restoring') {
-          await prisma.reactions.update({
-            where: {
-              reactionKey: pReaction.reactionKey
-            },
-            data: {
-              deletionBlockHeight: 0,
-              restorationBlockHeight: blockHeight,
-              status: 'loading',
-              pendingBlockHeight: null,
-              pendingSignature: null,
-              pendingTransaction: null
-            }
-          });
+      await prisma.$transaction(async (prismaTransaction) => {
+        for (const pReaction of pendingReactions) {
+          if (pReaction.status === 'creating') {
+            await prismaTransaction.reactions.update({
+              where: {
+                reactionKey: pReaction.reactionKey
+              },
+              data: {
+                reactionBlockHeight: blockHeight,
+                status: 'loading',
+                pendingBlockHeight: null,
+                pendingSignature: null,
+                pendingTransaction: null
+              }
+            });
+          } else if (pReaction.status === 'deleting') {
+            await prismaTransaction.reactions.update({
+              where: {
+                reactionKey: pReaction.reactionKey
+              },
+              data: {
+                deletionBlockHeight: blockHeight,
+                status: 'loading',
+                pendingBlockHeight: null,
+                pendingSignature: null,
+                pendingTransaction: null
+              }
+            });
+          } else if (pReaction.status === 'restoring') {
+            await prismaTransaction.reactions.update({
+              where: {
+                reactionKey: pReaction.reactionKey
+              },
+              data: {
+                deletionBlockHeight: 0,
+                restorationBlockHeight: blockHeight,
+                status: 'loading',
+                pendingBlockHeight: null,
+                pendingSignature: null,
+                pendingTransaction: null
+              }
+            });
+          }
         }
-      }
+      });
       return;
     }
   }
@@ -2326,49 +2332,51 @@ async function assertRepostsOnchainAndServerState(pendingReposts: RepostsFindMan
     attempts += 1;
   
     if (isUpdated) {
-      for (const pRepost of pendingReposts) {
-        if (pRepost.status === 'creating') {
-          await prisma.reposts.update({
-            where: {
-              repostKey: pRepost.repostKey
-            },
-            data: {
-              repostBlockHeight: blockHeight,
-              status: 'loading',
-              pendingBlockHeight: null,
-              pendingSignature: null,
-              pendingTransaction: null
-            }
-          });
-        } else if (pRepost.status === 'deleting') {
-          await prisma.reposts.update({
-            where: {
-              repostKey: pRepost.repostKey
-            },
-            data: {
-              deletionBlockHeight: blockHeight,
-              status: 'loading',
-              pendingBlockHeight: null,
-              pendingSignature: null,
-              pendingTransaction: null
-            }
-          });
-        } else if (pRepost.status === 'restoring') {
-          await prisma.reposts.update({
-            where: {
-              repostKey: pRepost.repostKey
-            },
-            data: {
-              deletionBlockHeight: 0,
-              restorationBlockHeight: blockHeight,
-              status: 'loading',
-              pendingBlockHeight: null,
-              pendingSignature: null,
-              pendingTransaction: null
-            }
-          });
+      await prisma.$transaction(async (prismaTransaction) => {
+        for (const pRepost of pendingReposts) {
+          if (pRepost.status === 'creating') {
+            await prismaTransaction.reposts.update({
+              where: {
+                repostKey: pRepost.repostKey
+              },
+              data: {
+                repostBlockHeight: blockHeight,
+                status: 'loading',
+                pendingBlockHeight: null,
+                pendingSignature: null,
+                pendingTransaction: null
+              }
+            });
+          } else if (pRepost.status === 'deleting') {
+            await prismaTransaction.reposts.update({
+              where: {
+                repostKey: pRepost.repostKey
+              },
+              data: {
+                deletionBlockHeight: blockHeight,
+                status: 'loading',
+                pendingBlockHeight: null,
+                pendingSignature: null,
+                pendingTransaction: null
+              }
+            });
+          } else if (pRepost.status === 'restoring') {
+            await prismaTransaction.reposts.update({
+              where: {
+                repostKey: pRepost.repostKey
+              },
+              data: {
+                deletionBlockHeight: 0,
+                restorationBlockHeight: blockHeight,
+                status: 'loading',
+                pendingBlockHeight: null,
+                pendingSignature: null,
+                pendingTransaction: null
+              }
+            });
+          }
         }
-      }
+      });
       return;
     }
   }
