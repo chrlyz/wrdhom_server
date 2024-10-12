@@ -1,5 +1,14 @@
 import fastify from 'fastify';
-import { CircuitString, PublicKey, Signature, Field, MerkleMap, Poseidon, Bool } from 'o1js';
+import {
+  CircuitString,
+  PublicKey,
+  Signature,
+  Field,
+  MerkleMap,
+  Poseidon,
+  Bool,
+  PrivateKey
+} from 'o1js';
 import cors from '@fastify/cors';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { createFileEncoderStream, CAREncoderStream } from 'ipfs-car';
@@ -17,7 +26,8 @@ import { CommentState, PostState, ReactionState, fieldToFlagTargetAsReposted,
   fieldToFlagRepostsAsDeleted,
   fieldToFlagRepostsAsRestored,
   fieldToFlagReactionsAsDeleted,
-  fieldToFlagReactionsAsRestored
+  fieldToFlagReactionsAsRestored,
+  Config
 } from 'wrdhom';
 import fs from 'fs/promises';
 import { fastifySchedule } from '@fastify/schedule';
@@ -33,16 +43,25 @@ const prisma = new PrismaClient();
 
 // ============================================================================
 
+const configJson: Config = JSON.parse(await fs.readFile('config.json', 'utf8'));
+const configPosts = configJson.deployAliases['posts'];
+const serverKeysBase58: { privateKey: string; publicKey: string } =
+  JSON.parse(await fs.readFile(configPosts.feepayerKeyPath, 'utf8'));
+const serverKey = PrivateKey.fromBase58(serverKeysBase58.privateKey);
+
 // Regenerate Merkle maps from database
 
 const usersPostsCountersMap = new MerkleMap();
 const postsMap = new MerkleMap();
+const postsStateHistoryMap = new MerkleMap();
 
 const postsContext = {
   prisma: prisma,
   usersPostsCountersMap: usersPostsCountersMap,
   postsMap: postsMap,
-  totalNumberOfPosts: 0
+  totalNumberOfPosts: 0,
+  postsLastUpdate: 0,
+  postsStateHistoryMap: postsStateHistoryMap
 }
 
 await regeneratePostsZkAppState(postsContext);
@@ -1197,11 +1216,11 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         }
       });
 
-      const profileAddress = PublicKey.fromBase58(post!.posterAddress);
+      const posterAddress = PublicKey.fromBase58(post!.posterAddress);
       const postContentID = CircuitString.fromString(post!.postContentID);
 
       const postState = new PostState({
-        posterAddress: profileAddress,
+        posterAddress: posterAddress,
         postContentID: postContentID,
         allPostsCounter: Field(post!.allPostsCounter),
         userPostsCounter: Field(post!.userPostsCounter),
@@ -1485,7 +1504,52 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       });
     };
 
+    const postsLastUpdate = await prisma.postsStateHistory.aggregate({
+      _max: {
+        atBlockHeight: true
+      }
+    });
+
+    const lastState = await prisma.postsStateHistory.findUnique({
+      where: {
+        atBlockHeight: BigInt(postsLastUpdate._max.atBlockHeight!)
+      }
+    });
+
+    const profileAddressForAudit = profileAddress || '0';
+    const hashedQuery = Poseidon.hash([
+      Field(howMany),
+      Field(fromBlock),
+      Field(toBlock),
+      Field(profileAddressForAudit)
+    ]);
+
+    const severSignature = Signature.create(
+      serverKey, [
+        hashedQuery, Field(lastState!.hashedState),
+        Field(lastState!.hashedState),
+        Field(lastState!.atBlockHeight)
+      ]
+    );
+
+    const postsAuditMetadata = {
+      query: {
+        howMany,
+        fromBlock,
+        toBlock,
+        profileAddressForAudit
+      },
+      hashedQuery: hashedQuery.toString(),
+      allPostsCounter: lastState!.allPostsCounter,
+      userPostsCounter: lastState!.userPostsCounter,
+      posts: lastState!.posts,
+      hashedState: lastState!.hashedState,
+      atBlockHeight: lastState!.atBlockHeight,
+      severSignature: JSON.stringify(severSignature)
+    }
+
     const response = {
+      postsAuditMetadata: postsAuditMetadata,
       postsResponse: postsResponse
     }
 
@@ -2108,8 +2172,13 @@ const getCID = async (file: Blob) => {
 
 // ============================================================================
 
-const createSQLPost = async (postKey: Field, signature: Signature, posterAddress: PublicKey,
-  allPostsCounter: number, userPostsCounter: number, postCID: any) => {
+const createSQLPost = async (postKey: Field,
+  signature: Signature,
+  posterAddress: PublicKey,
+  allPostsCounter: number,
+  userPostsCounter: number,
+  postCID: any
+) => {
 
   await prisma.posts.create({
     data: {
@@ -2129,10 +2198,16 @@ const createSQLPost = async (postKey: Field, signature: Signature, posterAddress
 
 // ============================================================================
 
-const createSQLReaction = async (reactionKey: Field, targetKey: Field, reactorAddress: string,
-  reactionCodePoint: number, allReactionsCounter: number,
-  userReactionsCounter: number, targetReactionsCounter:number,
-  signature: string) => {
+const createSQLReaction = async (
+  reactionKey: Field,
+  targetKey: Field,
+  reactorAddress: string,
+  reactionCodePoint: number,
+  allReactionsCounter: number,
+  userReactionsCounter: number,
+  targetReactionsCounter:number,
+  signature: string
+) => {
 
   await prisma.reactions.create({
     data: {
@@ -2155,10 +2230,16 @@ const createSQLReaction = async (reactionKey: Field, targetKey: Field, reactorAd
 
 // ============================================================================
 
-const createSQLComment = async (commentKey: Field, targetKey: Field, commenterAddress: string,
-  commentCID: any, allCommentsCounter: number,
-  userCommentsCounter: number, targetCommentsCounter: number,
-  signature: string) => {
+const createSQLComment = async (
+  commentKey: Field,
+  targetKey: Field,
+  commenterAddress: string,
+  commentCID: any,
+  allCommentsCounter: number,
+  userCommentsCounter: number,
+  targetCommentsCounter: number,
+  signature: string
+) => {
 
   await prisma.comments.create({
     data: {
@@ -2181,9 +2262,15 @@ const createSQLComment = async (commentKey: Field, targetKey: Field, commenterAd
 
 // ============================================================================
 
-const createSQLRepost = async (repostKey: Field, targetKey: Field, reposterAddress: string,
-  allRepostsCounter: number, userRepostsCounter: number, targetRepostsCounter:number,
-  signature: string) => {
+const createSQLRepost = async (
+  repostKey: Field,
+  targetKey: Field,
+  reposterAddress: string,
+  allRepostsCounter: number,
+  userRepostsCounter: number,
+  targetRepostsCounter:number,
+  signature: string
+) => {
 
   await prisma.reposts.create({
     data: {

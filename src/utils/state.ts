@@ -8,7 +8,9 @@ export async function regeneratePostsZkAppState(context: {
     prisma: PrismaClient,
     usersPostsCountersMap: MerkleMap,
     postsMap: MerkleMap,
-    totalNumberOfPosts: number
+    totalNumberOfPosts: number,
+    postsLastUpdate: number,
+    postsStateHistoryMap: MerkleMap
 }
 ) {
     const posts = await context.prisma.posts.findMany({
@@ -57,6 +59,26 @@ export async function regeneratePostsZkAppState(context: {
     });
     
     context.totalNumberOfPosts = posts.length;
+
+    const postsLastUpdate = await context.prisma.postsStateHistory.aggregate({
+      _max: {
+        atBlockHeight: true
+      }
+    });
+    context.postsLastUpdate = Number(postsLastUpdate._max.atBlockHeight);
+
+    const postsStateHistory = await context.prisma.postsStateHistory.findMany({
+      orderBy: {
+        atBlockHeight: 'asc'
+      }
+    });
+
+    postsStateHistory.forEach( state => {
+      context.postsStateHistoryMap.set(
+        Field(state.atBlockHeight),
+        Field(state.hashedState)
+      );
+    });
 
     return posts;
 }
