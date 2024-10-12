@@ -1,6 +1,6 @@
 import { CircuitString, PublicKey, Signature, fetchLastBlock,
   MerkleMap, Field, Poseidon, Mina, PrivateKey,
-  fetchAccount, Cache, Bool, checkZkappTransaction } from 'o1js';
+  fetchAccount, Bool, checkZkappTransaction } from 'o1js';
 import { Config, PostState, PostsTransition, Posts,
   PostsContract, PostsProof, ReactionState,
   ReactionsTransition, Reactions, ReactionsContract,
@@ -129,14 +129,17 @@ console.log(`${(endTime - startTime)/1000/60} minutes`);
 
 // Regenerate Merkle maps from database
 
-let usersPostsCountersMap = new MerkleMap();
-let postsMap = new MerkleMap();
+const usersPostsCountersMap = new MerkleMap();
+const postsMap = new MerkleMap();
+const postsStateHistoryMap = new MerkleMap();
 
 const postsContext = {
   prisma: prisma,
   usersPostsCountersMap: usersPostsCountersMap,
   postsMap: postsMap,
-  totalNumberOfPosts: 0
+  totalNumberOfPosts: 0,
+  postsLastUpdate: 0,
+  postsStateHistoryMap: postsStateHistoryMap
 }
 
 await regeneratePostsZkAppState(postsContext);
@@ -781,11 +784,21 @@ async function updatePostsOnChainState(transitionsAndProofs: PostTransitionAndPr
 
   const result = await recursiveMerge(transitionsAndProofs);
   
+  const blockHeight = result.transition.blockHeight;
+  const lastState = await prisma.postsStateHistory.findUnique({
+    where: {
+      atBlockHeight: blockHeight.toBigInt()
+    }
+  });
+  const postsHashedState = Field(lastState!.hashedState);
+  postsStateHistoryMap.set(blockHeight, postsHashedState);
+
+  const postsHashedStateWitness = postsStateHistoryMap.getWitness(blockHeight);
   let sentTxn;
   const txn = await Mina.transaction(
     { sender: feepayerAddress, fee: fee },
     async () => {
-      postsContract.update(result.proof);
+      postsContract.update(result.proof, postsHashedStateWitness);
     }
   );
   await txn.prove();
@@ -2046,6 +2059,10 @@ async function assertPostsOnchainAndServerState(pendingPosts: PostsFindMany, blo
     console.log('usersPostsCountersFetch: ' + usersPostsCountersFetch!.toString());
     const postsFetch = await postsContract.posts.fetch();
     console.log('postsFetch: ' + postsFetch!.toString());
+    const postsLastUpdateFetch = await postsContract.lastUpdate.fetch();
+    console.log('postsLastUpdateFetch: ' + postsLastUpdateFetch!.toString());
+    const postsStateHistoryFetch = await postsContract.stateHistory.fetch();
+    console.log('postsStateHistory: ' + postsStateHistoryFetch!.toString());
   
     const allPostsCounterAfter = Field(postsContext.totalNumberOfPosts);
     console.log('allPostsCounterAfter: ' + allPostsCounterAfter.toString());
@@ -2053,6 +2070,10 @@ async function assertPostsOnchainAndServerState(pendingPosts: PostsFindMany, blo
     console.log('usersPostsCountersAfter: ' + usersPostsCountersAfter.toString());
     const postsAfter = postsMap.getRoot();
     console.log('postsAfter: ' + postsAfter.toString());
+    const postsLastUpdateAfter = Field(postsContext.postsLastUpdate);
+    console.log('postsLastUpdateAfter: ' + postsLastUpdateAfter.toString());
+    const postsStateHistoryAfter = postsStateHistoryMap.getRoot();
+    console.log('postsStateHistoryAfter: ' + postsStateHistoryAfter.toString());
   
     const allPostsCounterEqual = allPostsCounterFetch!.equals(allPostsCounterAfter).toBoolean();
     console.log('allPostsCounterEqual: ' + allPostsCounterEqual);
@@ -2060,12 +2081,29 @@ async function assertPostsOnchainAndServerState(pendingPosts: PostsFindMany, blo
     console.log('usersPostsCountersEqual: ' + usersPostsCountersEqual);
     const postsEqual = postsFetch!.equals(postsAfter).toBoolean();
     console.log('postsEqual: ' + postsEqual);
+    const postsLastUpdateEqual = postsLastUpdateFetch!.equals(postsLastUpdateAfter).toBoolean();
+    console.log('postsLastUpdateEqual: ' + postsLastUpdateEqual);
+    const postsStateHistoryEqual = postsStateHistoryFetch!.equals(postsStateHistoryAfter).toBoolean();
+    console.log('postsStateHistoryEqual: ' + postsStateHistoryEqual);
   
-    isUpdated = allPostsCounterEqual && usersPostsCountersEqual && postsEqual;
+    isUpdated = allPostsCounterEqual
+      && usersPostsCountersEqual
+      && postsEqual
+      && postsLastUpdateEqual
+      && postsStateHistoryEqual;
+
     attempts += 1;
   
     if (isUpdated) {
       await prisma.$transaction(async (prismaTransaction) => {
+
+        await createSQLPostsState(
+          allPostsCounterAfter,
+          usersPostsCountersAfter,
+          postsAfter,
+          postsLastUpdateAfter
+        );
+
         for (const pPost of pendingPosts) {
           if (pPost.status === 'creating') {
             await prismaTransaction.posts.update({
@@ -2962,4 +3000,24 @@ async function processPendingActions(
 
   await assertState(pendingActions, currentBlockHeight);
   return true;
+}
+
+// ============================================================================
+
+async function createSQLPostsState (
+  allPostsCounter: Field,
+  usersPostsCounters: Field,
+  posts: Field,
+  postsLastUpdate: Field
+) {
+  const hashedState = Poseidon.hash([allPostsCounter, usersPostsCounters, posts]);
+  await prisma.postsStateHistory.create({
+    data: {
+      allPostsCounter: allPostsCounter.toBigInt(),
+      userPostsCounter: usersPostsCounters.toBigInt(),
+      posts: posts.toBigInt(),
+      hashedState: hashedState.toBigInt(),
+      atBlockHeight: postsLastUpdate.toBigInt()
+    }
+  });
 }

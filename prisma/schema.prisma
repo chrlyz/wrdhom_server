@@ -75,6 +75,14 @@ model reposts {
   pendingTransaction     String?
 }
 
+model postsStateHistory {
+  allPostsCounter  BigInt
+  userPostsCounter BigInt
+  posts            BigInt
+  hashedState      BigInt
+  atBlockHeight    BigInt @id
+}
+
 enum status_enum {
   create
   creating
