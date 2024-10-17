@@ -77,10 +77,11 @@ model reposts {
 
 model postsStateHistory {
   allPostsCounter  BigInt
-  userPostsCounter BigInt
-  posts            BigInt
-  hashedState      BigInt
-  atBlockHeight    BigInt @id
+  userPostsCounter String
+  posts            String
+  hashedState      String
+  atBlockHeight    BigInt       @id
+  status           status_enum?
 }
 
 enum status_enum {
