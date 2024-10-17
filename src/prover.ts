@@ -785,16 +785,17 @@ async function updatePostsOnChainState(transitionsAndProofs: PostTransitionAndPr
   const result = await recursiveMerge(transitionsAndProofs);
   
   const blockHeight = result.transition.blockHeight;
-  const lastState = await prisma.postsStateHistory.findUnique({
-    where: {
-      atBlockHeight: blockHeight.toBigInt()
-    }
-  });
-  const postsHashedState = Field(lastState!.hashedState);
-  postsStateHistoryMap.set(blockHeight, postsHashedState);
 
-  const postsHashedStateWitness = postsStateHistoryMap.getWitness(blockHeight);
+  await createSQLPostsState(
+    result.transition.latestAllPostsCounter,
+    result.transition.latestUsersPostsCounters,
+    result.transition.latestPosts,
+    blockHeight
+  );
+
   let sentTxn;
+  const postsHashedStateWitness = postsStateHistoryMap.getWitness(blockHeight);
+  
   const txn = await Mina.transaction(
     { sender: feepayerAddress, fee: fee },
     async () => {
@@ -2097,12 +2098,33 @@ async function assertPostsOnchainAndServerState(pendingPosts: PostsFindMany, blo
     if (isUpdated) {
       await prisma.$transaction(async (prismaTransaction) => {
 
-        await createSQLPostsState(
-          allPostsCounterAfter,
-          usersPostsCountersAfter,
-          postsAfter,
-          postsLastUpdateAfter
-        );
+        const postsLastUpdateBlockHeight = await prisma.postsStateHistory.aggregate({
+          _max: {
+            atBlockHeight: true
+          }
+        });
+
+        const lastState = await prisma.postsStateHistory.findUnique({
+          where: {
+            atBlockHeight: postsLastUpdateBlockHeight._max.atBlockHeight!
+          }
+        });
+
+        // Change status from pending creation to loaded/completed
+        await prismaTransaction.postsStateHistory.update({
+          where: {
+            atBlockHeight: postsLastUpdateBlockHeight._max.atBlockHeight!
+          },
+          data: {
+            status: 'loaded'
+          }
+        });
+        
+        // Update in-memory state for postsContext
+        postsContext.postsLastUpdate = Number(lastState!.atBlockHeight);
+        const atBlockHeight = Field(lastState!.atBlockHeight);
+        const hashedState = Field(lastState!.hashedState);
+        postsStateHistoryMap.set(atBlockHeight, hashedState);
 
         for (const pPost of pendingPosts) {
           if (pPost.status === 'creating') {
@@ -2150,6 +2172,7 @@ async function assertPostsOnchainAndServerState(pendingPosts: PostsFindMany, blo
       });
       return;
     }
+    await delay(DELAY);
   }
   throw new OnchainAndServerStateMismatchError('There is a mismatch between Posts onchain and server state');
 }
@@ -2431,7 +2454,8 @@ async function resetServerPostPublicationsState(pendingPosts: PostsFindMany) {
   const pendingPosters = new Set(pendingPosts.map( post => post.posterAddress));
   for (const poster of pendingPosters) {
     const userPosts = await prisma.posts.findMany({
-      where: { posterAddress: poster,
+      where: {
+        posterAddress: poster,
         postBlockHeight: {
           not: 0
         }
@@ -2453,6 +2477,12 @@ async function resetServerPostPublicationsState(pendingPosts: PostsFindMany) {
         Field(0)
     );
     console.log('Restored postsMap root: ' + postsMap.getRoot().toString());
+  });
+
+  await prisma.postsStateHistory.deleteMany({
+    where: {
+      status: 'creating'
+    }
   });
 }
 
@@ -3014,10 +3044,11 @@ async function createSQLPostsState (
   await prisma.postsStateHistory.create({
     data: {
       allPostsCounter: allPostsCounter.toBigInt(),
-      userPostsCounter: usersPostsCounters.toBigInt(),
-      posts: posts.toBigInt(),
-      hashedState: hashedState.toBigInt(),
-      atBlockHeight: postsLastUpdate.toBigInt()
+      userPostsCounter: usersPostsCounters.toString(),
+      posts: posts.toString(),
+      hashedState: hashedState.toString(),
+      atBlockHeight: postsLastUpdate.toBigInt(),
+      status: 'creating'
     }
   });
 }

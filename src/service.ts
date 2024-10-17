@@ -1504,15 +1504,22 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       });
     };
 
-    const postsLastUpdate = await prisma.postsStateHistory.aggregate({
+    const postsLastUpdateBlockHeight = await prisma.postsStateHistory.aggregate({
       _max: {
         atBlockHeight: true
       }
     });
 
+    if (postsLastUpdateBlockHeight._max.atBlockHeight === null) {
+      return {
+        postsAuditMetadata: {},
+        postsResponse: postsResponse
+      }
+    }
+
     const lastState = await prisma.postsStateHistory.findUnique({
       where: {
-        atBlockHeight: BigInt(postsLastUpdate._max.atBlockHeight!)
+        atBlockHeight: postsLastUpdateBlockHeight._max.atBlockHeight
       }
     });
 
