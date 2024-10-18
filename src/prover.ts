@@ -15,7 +15,8 @@ import {
   regenerateCommentsZkAppState,
   regeneratePostsZkAppState,
   regenerateReactionsZkAppState,
-  regenerateRepostsZkAppState
+  regenerateRepostsZkAppState,
+  getLastPostsState
 } from './utils/state.js';
 import * as dotenv from 'dotenv';
 import { Queue, QueueEvents } from 'bullmq';
@@ -225,7 +226,8 @@ while (true) {
     // If there isn't a pending transaction, process new actions
     if (pendingPosts.length === 0) {
       pendingPosts = await getPendingActions(prisma.posts, 'allPostsCounter', 'create');
-      // Handle possible pending transaction confirmation or failure
+
+    // Handle possible pending transaction confirmation or failure
     } else {
         const confirmed = await handlePendingTransaction(
           pendingPosts,
@@ -238,6 +240,7 @@ while (true) {
     }
 
     if (pendingPosts.length !== 0) {
+      console.log('pendingPosts.length !== 0: ' + pendingPosts.length)
       await processPendingActions(
         postsContext,
         pendingPosts,
@@ -783,19 +786,17 @@ async function updatePostsOnChainState(transitionsAndProofs: PostTransitionAndPr
   }
 
   const result = await recursiveMerge(transitionsAndProofs);
-  
-  const blockHeight = result.transition.blockHeight;
 
-  await createSQLPostsState(
+  await deleteCandidatePostsStateHistoryStatus();
+
+  const postsHashedStateWitness = await updateCandidatePostsStateHistoryStatus(
+    result.transition.blockHeight,
     result.transition.latestAllPostsCounter,
     result.transition.latestUsersPostsCounters,
-    result.transition.latestPosts,
-    blockHeight
+    result.transition.latestPosts
   );
 
   let sentTxn;
-  const postsHashedStateWitness = postsStateHistoryMap.getWitness(blockHeight);
-  
   const txn = await Mina.transaction(
     { sender: feepayerAddress, fee: fee },
     async () => {
@@ -2098,34 +2099,20 @@ async function assertPostsOnchainAndServerState(pendingPosts: PostsFindMany, blo
     if (isUpdated) {
       await prisma.$transaction(async (prismaTransaction) => {
 
-        const postsLastUpdateBlockHeight = await prisma.postsStateHistory.aggregate({
-          _max: {
-            atBlockHeight: true
-          }
-        });
-
-        const lastState = await prisma.postsStateHistory.findUnique({
-          where: {
-            atBlockHeight: postsLastUpdateBlockHeight._max.atBlockHeight!
-          }
-        });
+        const lastPostsState = await getLastPostsState(prisma);
 
         // Change status from pending creation to loaded/completed
         await prismaTransaction.postsStateHistory.update({
           where: {
-            atBlockHeight: postsLastUpdateBlockHeight._max.atBlockHeight!
+            atBlockHeight: lastPostsState?.atBlockHeight,
+            status: 'creating'
           },
           data: {
             status: 'loaded'
           }
         });
-        
-        // Update in-memory state for postsContext
-        postsContext.postsLastUpdate = Number(lastState!.atBlockHeight);
-        const atBlockHeight = Field(lastState!.atBlockHeight);
-        const hashedState = Field(lastState!.hashedState);
-        postsStateHistoryMap.set(atBlockHeight, hashedState);
 
+        // Change status from pending action to loading
         for (const pPost of pendingPosts) {
           if (pPost.status === 'creating') {
             await prismaTransaction.posts.update({
@@ -2479,11 +2466,7 @@ async function resetServerPostPublicationsState(pendingPosts: PostsFindMany) {
     console.log('Restored postsMap root: ' + postsMap.getRoot().toString());
   });
 
-  await prisma.postsStateHistory.deleteMany({
-    where: {
-      status: 'creating'
-    }
-  });
+  await deleteCandidatePostsStateHistoryStatus();
 }
 
 // ============================================================================
@@ -2762,6 +2745,57 @@ function resetServerRepostUpdatesState(pendingRepostUpdates: RepostsFindMany) {
 
 // ============================================================================
 
+async function updateCandidatePostsStateHistoryStatus(
+  blockHeight: Field,
+  allPostsCounter: Field,
+  usersPostsCounters: Field,
+  posts: Field
+) {
+
+  const lastHashedState = Poseidon.hash([
+    allPostsCounter,
+    usersPostsCounters,
+    posts,
+  ]);
+
+  const postsHashedStateWitness = postsStateHistoryMap.getWitness(blockHeight);
+
+  // Update in-memory state for postsContext
+  postsContext.postsLastUpdate = Number(blockHeight);
+  postsStateHistoryMap.set(blockHeight, lastHashedState);
+
+  // Persist candidate postsStateHistory entry for the current transaction
+  await createSQLPostsState(
+    allPostsCounter,
+    usersPostsCounters,
+    posts,
+    lastHashedState,
+    blockHeight
+  );
+
+  return postsHashedStateWitness;
+}
+
+// ============================================================================
+
+async function deleteCandidatePostsStateHistoryStatus() {
+  const lastPostsState = await getLastPostsState(prisma);
+
+  // Delete last candidate postsStateHistory entry for failed transaction
+  if (lastPostsState !== null) {
+    await prisma.postsStateHistory.delete({
+      where: {
+        atBlockHeight: lastPostsState.atBlockHeight,
+        status: 'creating'
+      }
+    });
+  }
+}
+
+
+
+// ============================================================================
+
 async function getTransactionStatus(pendingTransaction: Mina.PendingTransaction) {
   if (pendingTransaction.status === 'pending') {
     try {
@@ -2916,12 +2950,12 @@ async function handlePendingTransaction(
 
   // Check if the transaction was successfully confirmed
   if (previousTransactionStatus === 'confirmed') {
+
+    // Update in-memory state
     const contextKey = getProperContextKey(context);
     if (actionStatus === 'creating') {
       context[contextKey] += pendingActions.length;
     }
-
-    // Update server state
     for (const action of pendingActions) {
       await generateInputsForProving(action);
     }
@@ -3038,9 +3072,9 @@ async function createSQLPostsState (
   allPostsCounter: Field,
   usersPostsCounters: Field,
   posts: Field,
+  hashedState: Field,
   postsLastUpdate: Field
 ) {
-  const hashedState = Poseidon.hash([allPostsCounter, usersPostsCounters, posts]);
   await prisma.postsStateHistory.create({
     data: {
       allPostsCounter: allPostsCounter.toBigInt(),

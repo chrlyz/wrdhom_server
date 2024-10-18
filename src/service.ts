@@ -15,7 +15,8 @@ import { createFileEncoderStream, CAREncoderStream } from 'ipfs-car';
 import { Blob } from '@web-std/file';
 import * as dotenv from 'dotenv';
 import { regeneratePostsZkAppState, regenerateReactionsZkAppState,
-  regenerateCommentsZkAppState, regenerateRepostsZkAppState
+  regenerateCommentsZkAppState, regenerateRepostsZkAppState,
+  getLastPostsState
 } from './utils/state.js';
 import { CommentState, PostState, ReactionState, fieldToFlagTargetAsReposted,
   RepostState,
@@ -1504,24 +1505,16 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       });
     };
 
-    const postsLastUpdateBlockHeight = await prisma.postsStateHistory.aggregate({
-      _max: {
-        atBlockHeight: true
-      }
-    });
+    const lastPostsState = await getLastPostsState(prisma);
 
-    if (postsLastUpdateBlockHeight._max.atBlockHeight === null) {
+    if (lastPostsState === null) {
       return {
         postsAuditMetadata: {},
         postsResponse: postsResponse
       }
     }
 
-    const lastState = await prisma.postsStateHistory.findUnique({
-      where: {
-        atBlockHeight: postsLastUpdateBlockHeight._max.atBlockHeight
-      }
-    });
+    console.log(lastPostsState)
 
     const profileAddressForAudit = profileAddress || '0';
     const hashedQuery = Poseidon.hash([
@@ -1533,9 +1526,9 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
 
     const severSignature = Signature.create(
       serverKey, [
-        hashedQuery, Field(lastState!.hashedState),
-        Field(lastState!.hashedState),
-        Field(lastState!.atBlockHeight)
+        hashedQuery, Field(lastPostsState.hashedState),
+        Field(lastPostsState.hashedState),
+        Field(lastPostsState.atBlockHeight)
       ]
     );
 
@@ -1547,11 +1540,11 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         profileAddressForAudit
       },
       hashedQuery: hashedQuery.toString(),
-      allPostsCounter: lastState!.allPostsCounter,
-      userPostsCounter: lastState!.userPostsCounter,
-      posts: lastState!.posts,
-      hashedState: lastState!.hashedState,
-      atBlockHeight: lastState!.atBlockHeight,
+      allPostsCounter: lastPostsState.allPostsCounter.toString(),
+      userPostsCounter: lastPostsState.userPostsCounter,
+      posts: lastPostsState.posts,
+      hashedState: lastPostsState.hashedState,
+      atBlockHeight: lastPostsState.atBlockHeight.toString(),
       severSignature: JSON.stringify(severSignature)
     }
 

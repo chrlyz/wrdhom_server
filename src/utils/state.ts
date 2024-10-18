@@ -65,20 +65,28 @@ export async function regeneratePostsZkAppState(context: {
         atBlockHeight: true
       }
     });
-    context.postsLastUpdate = Number(postsLastUpdate._max.atBlockHeight);
 
     const postsStateHistory = await context.prisma.postsStateHistory.findMany({
       orderBy: {
-        atBlockHeight: 'asc'
+        atBlockHeight: 'asc',
+      },
+      where: {
+        status: 'loaded'
       }
     });
 
-    postsStateHistory.forEach( state => {
-      context.postsStateHistoryMap.set(
-        Field(state.atBlockHeight),
-        Field(state.hashedState)
-      );
-    });
+    if (postsLastUpdate._max.atBlockHeight !== null
+        && postsStateHistory.length === 0
+    ) {
+      context.postsLastUpdate = Number(postsLastUpdate._max.atBlockHeight);
+
+      postsStateHistory.forEach( state => {
+        context.postsStateHistoryMap.set(
+          Field(state.atBlockHeight),
+          Field(state.hashedState)
+        );
+      });
+    }
 
     return posts;
 }
@@ -336,3 +344,26 @@ export async function regenerateRepostsZkAppState(context: {
 }
 
 // ============================================================================
+
+export async function  getLastPostsState(prisma: PrismaClient) {
+
+  const postsLastUpdateBlockHeight = await prisma.postsStateHistory.aggregate({
+    _max: {
+      atBlockHeight: true
+    }
+  });
+
+  if (postsLastUpdateBlockHeight._max.atBlockHeight !== null) {
+
+    const lastState = await prisma.postsStateHistory.findUnique({
+      where: {
+        atBlockHeight: postsLastUpdateBlockHeight._max.atBlockHeight
+      }
+    });
+
+    return lastState;
+
+  } else {
+    return null;
+  }
+}
