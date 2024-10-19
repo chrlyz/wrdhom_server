@@ -68,8 +68,10 @@ const postsContext = {
 await regeneratePostsZkAppState(postsContext);
 
 console.log('totalNumberOfPosts: ' + postsContext.totalNumberOfPosts);
-console.log('usersPostsCountersMap: ' + usersPostsCountersMap.getRoot().toString());
-console.log('postsMap: ' + postsMap.getRoot().toString());
+console.log('usersPostsCountersMap: ' + postsContext.usersPostsCountersMap.getRoot().toString());
+console.log('postsMap: ' + postsContext.postsMap.getRoot().toString());
+console.log('postsLastUpdate: ' + postsContext.postsLastUpdate);
+console.log('postsStateHistory: ' + postsContext.postsStateHistoryMap.getRoot().toString());
 
 const usersReactionsCountersMap = new MerkleMap();
 const targetsReactionsCountersMap =  new MerkleMap();
@@ -169,51 +171,14 @@ const syncStateTask = new AsyncTask(
   'Sync with zkApp state',
   async () => {
 
-    const pendingPosts = await prisma.posts.findMany({
-      orderBy: {
-        allPostsCounter: 'asc'
-      },
-      where: {
-        status: 'loading'
-      }
-    });
-
-    for (const pPost of pendingPosts) {
-      console.log(pPost);
-      const posterAddress = PublicKey.fromBase58(pPost.posterAddress);
-      const userPostsCounter = Field(pPost.userPostsCounter);
-      const postState = new PostState({
-        posterAddress: posterAddress,
-        postContentID: CircuitString.fromString(pPost.postContentID),
-        allPostsCounter: Field(pPost.allPostsCounter),
-        userPostsCounter: userPostsCounter,
-        postBlockHeight: Field(pPost.postBlockHeight),
-        deletionBlockHeight: Field(pPost.deletionBlockHeight),
-        restorationBlockHeight: Field(pPost.restorationBlockHeight)
-      });
-
-      const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
-
-      postsMap.set(Field(pPost.postKey), postState.hash());
-
-      // Only update these values when the post is new
-      if (pPost.allPostsCounter > postsContext.totalNumberOfPosts) {
-        postsContext.totalNumberOfPosts += 1;
-        usersPostsCountersMap.set(posterAddressAsField, userPostsCounter);
-      }
-      
+    let previousPostsMap = postsContext.postsMap.getRoot().toString();
+    await regeneratePostsZkAppState(postsContext);
+    if (previousPostsMap !== postsContext.postsMap.getRoot().toString()) {
       console.log('totalNumberOfPosts: ' + postsContext.totalNumberOfPosts);
-      console.log('usersPostsCountersMap: ' + usersPostsCountersMap.getRoot().toString())
-      console.log('postsMap: ' + postsMap.getRoot().toString())
-
-      await prisma.posts.update({
-        where: {
-          postKey: pPost.postKey
-        },
-        data: {
-          status: 'loaded'
-        }
-      });
+      console.log('usersPostsCountersMap: ' + postsContext.usersPostsCountersMap.getRoot().toString());
+      console.log('postsMap: ' + postsContext.postsMap.getRoot().toString());
+      console.log('postsLastUpdate: ' + postsContext.postsLastUpdate);
+      console.log('postsStateHistory: ' + postsContext.postsStateHistoryMap.getRoot().toString());
     }
 
     const pendingReactions = await prisma.reactions.findMany({
@@ -1514,14 +1479,19 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       }
     }
 
-    console.log(lastPostsState)
+    let profileAddressForAudit;
+    if (profileAddress) {
+      const profileAddressAsPublicKey = PublicKey.fromBase58(profileAddress);
+      profileAddressForAudit = Poseidon.hash(profileAddressAsPublicKey.toFields());
+    } else {
+      profileAddressForAudit = Field(0);
+    }
 
-    const profileAddressForAudit = profileAddress || '0';
     const hashedQuery = Poseidon.hash([
       Field(howMany),
       Field(fromBlock),
       Field(toBlock),
-      Field(profileAddressForAudit)
+      profileAddressForAudit
     ]);
 
     const severSignature = Signature.create(

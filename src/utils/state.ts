@@ -13,16 +13,70 @@ export async function regeneratePostsZkAppState(context: {
     postsStateHistoryMap: MerkleMap
 }
 ) {
-    const posts = await context.prisma.posts.findMany({
-      orderBy: {
-        allPostsCounter: 'asc'
-      },
-      where: {
-        postBlockHeight: {
-          not: 0
+
+    let posts;
+    let postsStateHistory;
+    if (context.totalNumberOfPosts === 0) {
+
+      posts = await context.prisma.posts.findMany({
+        orderBy: {
+          allPostsCounter: 'asc'
+        },
+        where: {
+          postBlockHeight: {
+            not: 0
+          }
         }
+      });
+
+      postsStateHistory = await context.prisma.postsStateHistory.findMany({
+        orderBy: {
+          atBlockHeight: 'asc',
+        }
+      });
+
+    } else {
+
+      posts = await context.prisma.posts.findMany({
+        orderBy: {
+          allPostsCounter: 'asc'
+        },
+        where: {
+          status: 'loading'
+        }
+      });
+
+      for (const post of posts) {
+        await context.prisma.posts.update({
+          where: {
+            postKey: post.postKey,
+          },
+          data: {
+            status: 'loaded'
+          }
+        });
       }
-    });
+
+      postsStateHistory = await context.prisma.postsStateHistory.findMany({
+        orderBy: {
+          atBlockHeight: 'asc',
+        },
+        where: {
+          status: 'loading'
+        }
+      });
+
+      for (const postState of postsStateHistory) {
+        await context.prisma.postsStateHistory.update({
+          where: {
+            atBlockHeight: postState.atBlockHeight
+          },
+          data: {
+            status: 'loaded'
+          }
+        });
+      }
+    }
     
     const posters = new Set(posts.map( post => post.posterAddress));
     for (const poster of posters) {
@@ -39,15 +93,16 @@ export async function regeneratePostsZkAppState(context: {
       );
     };
     
-    posts.forEach( post => {
+    for (const post of posts) {
       const posterAddress = PublicKey.fromBase58(post.posterAddress);
       const posterAddressAsField = Poseidon.hash(posterAddress.toFields());
       const postContentID = CircuitString.fromString(post.postContentID);
+      const userPostsCounter = Field(post.userPostsCounter);
       const postState = new PostState({
         posterAddress: posterAddress,
         postContentID: postContentID,
         allPostsCounter: Field(post.allPostsCounter),
-        userPostsCounter: Field(post.userPostsCounter),
+        userPostsCounter: userPostsCounter,
         postBlockHeight: Field(post.postBlockHeight),
         deletionBlockHeight: Field(post.deletionBlockHeight),
         restorationBlockHeight: Field(post.restorationBlockHeight)
@@ -56,36 +111,30 @@ export async function regeneratePostsZkAppState(context: {
         Poseidon.hash([posterAddressAsField, postContentID.hash()]),
         postState.hash()
       );
-    });
-    
-    context.totalNumberOfPosts = posts.length;
 
-    const postsLastUpdate = await context.prisma.postsStateHistory.aggregate({
+      // Only update these values when the post is new
+      if (post.allPostsCounter > context.totalNumberOfPosts) {
+        context.totalNumberOfPosts += 1;
+        context.usersPostsCountersMap.set(posterAddressAsField, userPostsCounter);
+      }
+    }
+
+    const postsLastUpdateRaw = await context.prisma.postsStateHistory.aggregate({
       _max: {
         atBlockHeight: true
       }
     });
+    const postsLastUpdate = postsLastUpdateRaw._max.atBlockHeight;
 
-    const postsStateHistory = await context.prisma.postsStateHistory.findMany({
-      orderBy: {
-        atBlockHeight: 'asc',
-      },
-      where: {
-        status: 'loaded'
-      }
-    });
+    if (postsLastUpdate !== null) {
+      context.postsLastUpdate = Number(postsLastUpdate);
 
-    if (postsLastUpdate._max.atBlockHeight !== null
-        && postsStateHistory.length === 0
-    ) {
-      context.postsLastUpdate = Number(postsLastUpdate._max.atBlockHeight);
-
-      postsStateHistory.forEach( state => {
+      for (const postState of postsStateHistory) {
         context.postsStateHistoryMap.set(
-          Field(state.atBlockHeight),
-          Field(state.hashedState)
+          Field(postState.atBlockHeight),
+          Field(postState.hashedState)
         );
-      });
+      }
     }
 
     return posts;
