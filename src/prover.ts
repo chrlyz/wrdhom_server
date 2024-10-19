@@ -240,7 +240,6 @@ while (true) {
     }
 
     if (pendingPosts.length !== 0) {
-      console.log('pendingPosts.length !== 0: ' + pendingPosts.length)
       await processPendingActions(
         postsContext,
         pendingPosts,
@@ -2101,14 +2100,15 @@ async function assertPostsOnchainAndServerState(pendingPosts: PostsFindMany, blo
 
         const lastPostsState = await getLastPostsState(prisma);
 
-        // Change status from pending creation to loaded/completed
+        // Change status from pending creation to loading 
+        // (by the service that serves the auditable content)
         await prismaTransaction.postsStateHistory.update({
           where: {
             atBlockHeight: lastPostsState?.atBlockHeight,
             status: 'creating'
           },
           data: {
-            status: 'loaded'
+            status: 'loading'
           }
         });
 
@@ -2782,7 +2782,7 @@ async function deleteCandidatePostsStateHistoryStatus() {
   const lastPostsState = await getLastPostsState(prisma);
 
   // Delete last candidate postsStateHistory entry for failed transaction
-  if (lastPostsState !== null) {
+  if (lastPostsState !== null && lastPostsState.status == 'creating') {
     await prisma.postsStateHistory.delete({
       where: {
         atBlockHeight: lastPostsState.atBlockHeight,
