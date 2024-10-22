@@ -1495,8 +1495,9 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
     ]);
 
     const severSignature = Signature.create(
-      serverKey, [
-        hashedQuery, Field(lastPostsState.hashedState),
+      serverKey,
+      [
+        hashedQuery,
         Field(lastPostsState.hashedState),
         Field(lastPostsState.atBlockHeight)
       ]
