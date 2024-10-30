@@ -32,6 +32,9 @@ export async function regeneratePostsZkAppState(context: {
       postsStateHistory = await context.prisma.postsStateHistory.findMany({
         orderBy: {
           atBlockHeight: 'asc',
+        },
+        where: {
+          status: 'loaded'
         }
       });
 
