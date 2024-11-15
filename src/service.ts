@@ -1532,6 +1532,40 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
 
 // ============================================================================
 
+server.get<{Querystring: PostsAudit}>('/posts/audit', async (request) => {
+  try {
+    const { atBlockHeight } = request.query
+
+    const historicPostsState = await prisma.postsStateHistory.findUnique({
+      where: {
+        atBlockHeight: atBlockHeight
+      }
+    });
+
+    const historicPostsStateWitness = postsStateHistoryMap.getWitness(
+      Field(atBlockHeight)
+    );
+
+    const response = {
+      historicPostsState: {
+        allPostsCounter: historicPostsState!.allPostsCounter.toString(),
+        userPostsCounter: historicPostsState!.userPostsCounter,
+        posts: historicPostsState!.posts,
+        hashedState: historicPostsState!.hashedState,
+        atBlockHeight: historicPostsState!.atBlockHeight.toString()
+      },
+      historicPostsStateWitness: JSON.stringify(historicPostsStateWitness)
+    }
+
+    return response;
+
+  } catch(e) {
+      console.error(e);
+  }
+});
+
+// ============================================================================
+
 server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
   try {
     const { targetKey, howMany, fromBlock, toBlock, commentKey } = request.query;
@@ -1982,6 +2016,10 @@ interface PostsQuery {
   profileAddress: string,
   postKey: string,
   currentUser: string
+}
+
+interface PostsAudit {
+  atBlockHeight: number
 }
 
 // ============================================================================
