@@ -16,7 +16,8 @@ import {
   regeneratePostsZkAppState,
   regenerateReactionsZkAppState,
   regenerateRepostsZkAppState,
-  getLastPostsState
+  getLastPostsState,
+  getLastReactionsState
 } from './utils/state.js';
 import * as dotenv from 'dotenv';
 import { Queue, QueueEvents } from 'bullmq';
@@ -148,13 +149,16 @@ await regeneratePostsZkAppState(postsContext);
 const usersReactionsCountersMap = new MerkleMap();
 const targetsReactionsCountersMap =  new MerkleMap();
 const reactionsMap = new MerkleMap();
+const reactionsStateHistoryMap = new MerkleMap();
 
 const reactionsContext = {
   prisma: prisma,
   usersReactionsCountersMap: usersReactionsCountersMap,
   targetsReactionsCountersMap: targetsReactionsCountersMap,
   reactionsMap: reactionsMap,
-  totalNumberOfReactions: 0
+  totalNumberOfReactions: 0,
+  reactionsLastUpdate: 0,
+  reactionsStateHistoryMap: reactionsStateHistoryMap
 }
 
 await regenerateReactionsZkAppState(reactionsContext);
@@ -965,12 +969,22 @@ async function updateReactionsOnChainState(transitionsAndProofs: ReactionTransit
   }
 
   const result = await recursiveMerge(transitionsAndProofs);
-  
+
+  await deleteCandidateReactionsStateHistoryStatus();
+
+  const reactionsHashedStateWitness = await updateCandidateReactionsStateHistoryStatus(
+    result.transition.blockHeight,
+    result.transition.latestAllReactionsCounter,
+    result.transition.latestUsersReactionsCounters,
+    result.transition.latestTargetsReactionsCounters,
+    result.transition.latestReactions
+  );
+
   let sentTxn;
   const txn = await Mina.transaction(
     { sender: feepayerAddress, fee: fee },
     async () => {
-      reactionsContract.update(result.proof);
+      reactionsContract.update(result.proof, reactionsHashedStateWitness);
     }
   );
   await txn.prove();
@@ -2268,6 +2282,11 @@ async function assertReactionsOnchainAndServerState(pendingReactions: ReactionsF
     console.log('targetsReactionsCountersFetch: ' + targetsReactionsCountersFetch!.toString());
     const reactionsFetch = await reactionsContract.reactions.fetch();
     console.log('reactionsFetch: ' + reactionsFetch!.toString());
+    const reactionsLastUpdateFetch = await reactionsContract.lastUpdate.fetch();
+    console.log('reactionsLastUpdateFetch: ' + reactionsLastUpdateFetch!.toString());
+    const reactionsStateHistoryFetch = await reactionsContract.stateHistory.fetch();
+    console.log('reactionsStateHistoryFetch: ' + reactionsStateHistoryFetch!.toString());
+
   
     const allReactionsCounterAfter = Field(reactionsContext.totalNumberOfReactions);
     console.log('allReactionsCounterAfter: ' + allReactionsCounterAfter.toString());
@@ -2277,6 +2296,11 @@ async function assertReactionsOnchainAndServerState(pendingReactions: ReactionsF
     console.log('targetsReactionsCountersAfter: ' + targetsReactionsCountersAfter.toString());
     const reactionsAfter = reactionsMap.getRoot();
     console.log('reactionsAfter: ' + reactionsAfter.toString());
+    const reactionsLastUpdateAfter = Field(reactionsContext.reactionsLastUpdate);
+    console.log('reactionsLastUpdateAfter: ' + reactionsLastUpdateAfter.toString());
+    const reactionsStateHistoryAfter = reactionsStateHistoryMap.getRoot();
+    console.log('reactionsStateHistoryAfter: ' + reactionsStateHistoryAfter.toString());
+
   
     const allReactionsCounterEqual = allReactionsCounterFetch!.equals(allReactionsCounterAfter).toBoolean();
     console.log('allReactionsCounterEqual: ' + allReactionsCounterEqual);
@@ -2286,12 +2310,39 @@ async function assertReactionsOnchainAndServerState(pendingReactions: ReactionsF
     console.log('targetsReactionsCountersEqual: ' + targetsReactionsCountersEqual);
     const reactionsEqual = reactionsFetch!.equals(reactionsAfter).toBoolean();
     console.log('reactionsEqual: ' + reactionsEqual);
+    const reactionsLastUpdateEqual = reactionsLastUpdateFetch!.equals(reactionsLastUpdateAfter).toBoolean();
+    console.log('reactionsLastUpdateEqual: ' + reactionsLastUpdateEqual);
+    const reactionsStateHistoryEqual = reactionsStateHistoryFetch!.equals(reactionsStateHistoryAfter).toBoolean();
+    console.log('reactionsStateHistoryEqual: ' + reactionsStateHistoryEqual);
+
   
-    isUpdated = allReactionsCounterEqual && usersReactionsCountersEqual && targetsReactionsCountersEqual && reactionsEqual;
+    isUpdated = allReactionsCounterEqual
+      && usersReactionsCountersEqual
+      && targetsReactionsCountersEqual
+      && reactionsEqual
+      && reactionsLastUpdateEqual
+      && reactionsStateHistoryEqual;
+
     attempts += 1;
   
     if (isUpdated) {
       await prisma.$transaction(async (prismaTransaction) => {
+
+        const lastReactionsState = await getLastReactionsState(prisma);
+
+        // Change status from pending creation to loading 
+        // (by the service that serves the auditable content)
+        await prismaTransaction.reactionsStateHistory.update({
+          where: {
+            atBlockHeight: lastReactionsState?.atBlockHeight,
+            status: 'creating'
+          },
+          data: {
+            status: 'loading'
+          }
+        });
+
+        // Change status from pending action to loading
         for (const pReaction of pendingReactions) {
           if (pReaction.status === 'creating') {
             await prismaTransaction.reactions.update({
@@ -2338,6 +2389,7 @@ async function assertReactionsOnchainAndServerState(pendingReactions: ReactionsF
       });
       return;
     }
+    await delay(DELAY);
   }
   throw new OnchainAndServerStateMismatchError('There is a mismatch between Reactions onchain and server state');
 }
@@ -2532,7 +2584,8 @@ async function resetServerReactionPublicationsState(pendingReactions: ReactionsF
   const pendingReactioners = new Set(pendingReactions.map( reaction => reaction.reactorAddress));
   for (const reactioner of pendingReactioners) {
     const userReactions = await prisma.reactions.findMany({
-      where: { reactorAddress: reactioner,
+      where: {
+        reactorAddress: reactioner,
         reactionBlockHeight: {
           not: 0
         }
@@ -2573,6 +2626,8 @@ async function resetServerReactionPublicationsState(pendingReactions: ReactionsF
     );
     console.log('Restored reactionsMap root: ' + reactionsMap.getRoot().toString());
   });
+
+  await deleteCandidateReactionsStateHistoryStatus();
 }
 
 // ============================================================================
@@ -2778,6 +2833,42 @@ async function updateCandidatePostsStateHistoryStatus(
 
 // ============================================================================
 
+async function updateCandidateReactionsStateHistoryStatus(
+  blockHeight: Field,
+  allReactionsCounter: Field,
+  usersReactionsCounters: Field,
+  targetsReactionsCounters: Field,
+  reactions: Field
+) {
+
+  const lastHashedState = Poseidon.hash([
+    allReactionsCounter,
+    usersReactionsCounters,
+    targetsReactionsCounters,
+    reactions
+  ]);
+
+  const reactionsHashedStateWitness = reactionsStateHistoryMap.getWitness(blockHeight);
+
+  // Update in-memory state for reactionsContext
+  reactionsContext.reactionsLastUpdate = Number(blockHeight);
+  reactionsStateHistoryMap.set(blockHeight, lastHashedState);
+
+  // Persist candidate reactionsStateHistory entry for the current transaction
+  await createSQLReactionsState(
+    allReactionsCounter,
+    usersReactionsCounters,
+    targetsReactionsCounters,
+    reactions,
+    lastHashedState,
+    blockHeight
+  );
+
+  return reactionsHashedStateWitness;
+}
+
+// ============================================================================
+
 async function deleteCandidatePostsStateHistoryStatus() {
   const lastPostsState = await getLastPostsState(prisma);
 
@@ -2792,7 +2883,21 @@ async function deleteCandidatePostsStateHistoryStatus() {
   }
 }
 
+// ============================================================================
 
+async function deleteCandidateReactionsStateHistoryStatus() {
+  const lastReactionsState = await getLastReactionsState(prisma);
+
+  // Delete last candidate reactionsStateHistory entry for failed transaction
+  if (lastReactionsState !== null && lastReactionsState.status == 'creating') {
+    await prisma.reactionsStateHistory.delete({
+      where: {
+        atBlockHeight: lastReactionsState.atBlockHeight,
+        status: 'creating'
+      }
+    });
+  }
+}
 
 // ============================================================================
 
@@ -3086,3 +3191,28 @@ async function createSQLPostsState (
     }
   });
 }
+
+// ============================================================================
+
+async function createSQLReactionsState (
+  allReactionsCounter: Field,
+  usersReactionsCounters: Field,
+  targetsReactionsCounters: Field,
+  reactions: Field,
+  hashedState: Field,
+  reactionsLastUpdate: Field
+) {
+  await prisma.reactionsStateHistory.create({
+    data: {
+      allReactionsCounter: allReactionsCounter.toBigInt(),
+      usersReactionsCounters: usersReactionsCounters.toString(),
+      targetsReactionsCounters: targetsReactionsCounters.toString(),
+      reactions: reactions.toString(),
+      hashedState: hashedState.toString(),
+      atBlockHeight: reactionsLastUpdate.toBigInt(),
+      status: 'creating'
+    }
+  });
+}
+
+// ============================================================================

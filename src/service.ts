@@ -14,9 +14,13 @@ import { PrismaClient, Prisma } from '@prisma/client';
 import { createFileEncoderStream, CAREncoderStream } from 'ipfs-car';
 import { Blob } from '@web-std/file';
 import * as dotenv from 'dotenv';
-import { regeneratePostsZkAppState, regenerateReactionsZkAppState,
-  regenerateCommentsZkAppState, regenerateRepostsZkAppState,
-  getLastPostsState
+import {
+  regeneratePostsZkAppState,
+  regenerateReactionsZkAppState,
+  regenerateCommentsZkAppState,
+  regenerateRepostsZkAppState,
+  getLastPostsState,
+  getLastReactionsState
 } from './utils/state.js';
 import { CommentState, PostState, ReactionState, fieldToFlagTargetAsReposted,
   RepostState,
@@ -68,29 +72,34 @@ const postsContext = {
 await regeneratePostsZkAppState(postsContext);
 
 console.log('totalNumberOfPosts: ' + postsContext.totalNumberOfPosts);
-console.log('usersPostsCountersMap: ' + postsContext.usersPostsCountersMap.getRoot().toString());
-console.log('postsMap: ' + postsContext.postsMap.getRoot().toString());
+console.log('usersPostsCountersRoot: ' + postsContext.usersPostsCountersMap.getRoot().toString());
+console.log('postsRoot: ' + postsContext.postsMap.getRoot().toString());
 console.log('postsLastUpdate: ' + postsContext.postsLastUpdate);
-console.log('postsStateHistory: ' + postsContext.postsStateHistoryMap.getRoot().toString());
+console.log('postsStateHistoryRoot: ' + postsContext.postsStateHistoryMap.getRoot().toString());
 
 const usersReactionsCountersMap = new MerkleMap();
 const targetsReactionsCountersMap =  new MerkleMap();
 const reactionsMap = new MerkleMap();
+const reactionsStateHistoryMap = new MerkleMap();
 
 const reactionsContext = {
   prisma: prisma,
   usersReactionsCountersMap: usersReactionsCountersMap,
   targetsReactionsCountersMap: targetsReactionsCountersMap,
   reactionsMap: reactionsMap,
-  totalNumberOfReactions: 0
+  totalNumberOfReactions: 0,
+  reactionsLastUpdate: 0,
+  reactionsStateHistoryMap: reactionsStateHistoryMap
 }
 
 await regenerateReactionsZkAppState(reactionsContext);
 
 console.log('totalNumberOfReactions: ' + reactionsContext.totalNumberOfReactions);
-console.log('usersReactionsCountersMap: ' + usersReactionsCountersMap.getRoot().toString());
-console.log('targetsReactionsCountersMap: ' + targetsReactionsCountersMap.getRoot().toString());
-console.log('reactionsMap: ' + reactionsMap.getRoot().toString());
+console.log('usersReactionsCountersRoot: ' + usersReactionsCountersMap.getRoot().toString());
+console.log('targetsReactionsCountersRoot: ' + targetsReactionsCountersMap.getRoot().toString());
+console.log('reactionsRoot: ' + reactionsMap.getRoot().toString());
+console.log('reactionsLastUpdate: ' + reactionsContext.reactionsLastUpdate);
+console.log('reactionsStateHistoryRoot: ' + reactionsContext.reactionsStateHistoryMap.getRoot().toString());
 
 const usersCommentsCountersMap = new MerkleMap();
 const targetsCommentsCountersMap =  new MerkleMap();
@@ -171,66 +180,25 @@ const syncStateTask = new AsyncTask(
   'Sync with zkApp state',
   async () => {
 
-    let previousPostsMap = postsContext.postsMap.getRoot().toString();
+    let previousPostsRoot = postsContext.postsMap.getRoot().toString();
     await regeneratePostsZkAppState(postsContext);
-    if (previousPostsMap !== postsContext.postsMap.getRoot().toString()) {
+    if (previousPostsRoot !== postsContext.postsMap.getRoot().toString()) {
       console.log('totalNumberOfPosts: ' + postsContext.totalNumberOfPosts);
-      console.log('usersPostsCountersMap: ' + postsContext.usersPostsCountersMap.getRoot().toString());
-      console.log('postsMap: ' + postsContext.postsMap.getRoot().toString());
+      console.log('usersPostsCountersRoot: ' + postsContext.usersPostsCountersMap.getRoot().toString());
+      console.log('postsRoot: ' + postsContext.postsMap.getRoot().toString());
       console.log('postsLastUpdate: ' + postsContext.postsLastUpdate);
-      console.log('postsStateHistory: ' + postsContext.postsStateHistoryMap.getRoot().toString());
+      console.log('postsStateHistoryRoot: ' + postsContext.postsStateHistoryMap.getRoot().toString());
     }
 
-    const pendingReactions = await prisma.reactions.findMany({
-      orderBy: {
-        allReactionsCounter: 'asc'
-      },
-      where: {
-        status: 'loading'
-      }
-    });
-
-    for (const pReaction of pendingReactions) {
-      const reactorAddress = PublicKey.fromBase58(pReaction.reactorAddress);
-      const reactionCodePointAsField = Field(pReaction.reactionCodePoint);
-      
-      console.log(pReaction);
-      const reactionState = new ReactionState({
-        isTargetPost: Bool(pReaction.isTargetPost),
-        targetKey: Field(pReaction.targetKey),
-        reactorAddress: reactorAddress,
-        reactionCodePoint: reactionCodePointAsField,
-        allReactionsCounter: Field(pReaction.allReactionsCounter),
-        userReactionsCounter: Field(pReaction.userReactionsCounter),
-        targetReactionsCounter: Field(pReaction.targetReactionsCounter),
-        reactionBlockHeight: Field(pReaction.reactionBlockHeight),
-        deletionBlockHeight: Field(pReaction.deletionBlockHeight),
-        restorationBlockHeight: Field(pReaction.restorationBlockHeight)
-      });
-
-      reactionsMap.set(Field(pReaction.reactionKey), reactionState.hash());
-
-      // Only update these values when the reaction is new
-      if (pReaction.allReactionsCounter > reactionsContext.totalNumberOfReactions) {
-        reactionsContext.totalNumberOfReactions += 1;
-        const reactorAddressAsField = Poseidon.hash(reactorAddress.toFields())
-        usersReactionsCountersMap.set(reactorAddressAsField, Field(pReaction.userReactionsCounter));
-        targetsReactionsCountersMap.set(Field(pReaction.targetKey), Field(pReaction.targetReactionsCounter));
-      }
-      
+    let previousReactionsRoot = reactionsContext.reactionsMap.getRoot().toString();
+    await regenerateReactionsZkAppState(reactionsContext);
+    if (previousReactionsRoot !== reactionsContext.reactionsMap.getRoot().toString()) {
       console.log('totalNumberOfReactions: ' + reactionsContext.totalNumberOfReactions);
-      console.log('usersReactionsCountersMap: ' + usersReactionsCountersMap.getRoot().toString());
-      console.log('targetsReactionsCountersMap: ' + targetsReactionsCountersMap.getRoot().toString());
-      console.log('reactionsMap: ' + reactionsMap.getRoot().toString());
-
-      await prisma.reactions.update({
-        where: {
-          reactionKey: pReaction.reactionKey
-        },
-        data: {
-          status: 'loaded'
-        }
-      });
+      console.log('usersReactionsCountersRoot: ' + usersReactionsCountersMap.getRoot().toString());
+      console.log('targetsReactionsCountersRoot: ' + targetsReactionsCountersMap.getRoot().toString());
+      console.log('reactionsRoot: ' + reactionsMap.getRoot().toString());
+      console.log('reactionsLastUpdate: ' + reactionsContext.reactionsLastUpdate);
+      console.log('reactionsStateHistoryRoot: ' + reactionsContext.reactionsStateHistoryMap.getRoot().toString());
     }
 
     const pendingComments = await prisma.comments.findMany({
@@ -1479,6 +1447,20 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       }
     }
 
+    let lastReactionsState = await getLastReactionsState(prisma);
+
+    if (lastReactionsState === null) {
+      lastReactionsState = {
+        allReactionsCounter: BigInt(0),
+        usersReactionsCounters: '',
+        targetsReactionsCounters: '',
+        reactions: '',
+        hashedState: '',
+        atBlockHeight: BigInt(0),
+        status: null
+      }
+    }
+
     let profileAddressForAudit;
     if (profileAddress) {
       const profileAddressAsPublicKey = PublicKey.fromBase58(profileAddress);
@@ -1499,7 +1481,9 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       [
         hashedQuery,
         Field(lastPostsState.hashedState),
-        Field(lastPostsState.atBlockHeight)
+        Field(lastPostsState.atBlockHeight),
+        Field(lastReactionsState.hashedState),
+        Field(lastReactionsState.atBlockHeight)
       ]
     );
 
@@ -1516,6 +1500,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       posts: lastPostsState.posts,
       hashedState: lastPostsState.hashedState,
       atBlockHeight: lastPostsState.atBlockHeight.toString(),
+      lastReactionsState: JSON.stringify(lastReactionsState),
       severSignature: JSON.stringify(severSignature)
     }
 

@@ -84,6 +84,16 @@ model postsStateHistory {
   status           status_enum?
 }
 
+model reactionsStateHistory {
+  allReactionsCounter  BigInt
+  usersReactionsCounters String
+  targetsReactionsCounters String
+  reactions            String
+  hashedState      String
+  atBlockHeight    BigInt       @id
+  status           status_enum?
+}
+
 enum status_enum {
   create
   creating
