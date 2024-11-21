@@ -122,6 +122,7 @@ export async function regeneratePostsZkAppState(context: {
       }
     }
 
+    // Get last state update
     const postsLastUpdateRaw = await context.prisma.postsStateHistory.aggregate({
       _max: {
         atBlockHeight: true
@@ -129,6 +130,7 @@ export async function regeneratePostsZkAppState(context: {
     });
     const postsLastUpdate = postsLastUpdateRaw._max.atBlockHeight;
 
+    // If state history isn't empty, regenerate it
     if (postsLastUpdate !== null) {
       context.postsLastUpdate = Number(postsLastUpdate);
 
@@ -150,19 +152,78 @@ export async function regenerateReactionsZkAppState(context: {
   usersReactionsCountersMap: MerkleMap,
   targetsReactionsCountersMap: MerkleMap,
   reactionsMap: MerkleMap,
-  totalNumberOfReactions: number
+  totalNumberOfReactions: number,
+  reactionsLastUpdate: number,
+  reactionsStateHistoryMap: MerkleMap
 }
 ) {
-  const reactions = await context.prisma.reactions.findMany({
-    orderBy: {
-      allReactionsCounter: 'asc'
-    },
-    where: {
-      reactionBlockHeight: {
-        not: 0
+
+  let reactions;
+  let reactionsStateHistory;
+  if (context.totalNumberOfReactions === 0) {
+
+    reactions = await context.prisma.reactions.findMany({
+      orderBy: {
+        allReactionsCounter: 'asc'
+      },
+      where: {
+        reactionBlockHeight: {
+          not: 0
+        }
       }
+    });
+
+    reactionsStateHistory = await context.prisma.reactionsStateHistory.findMany({
+      orderBy: {
+        atBlockHeight: 'asc',
+      },
+      where: {
+        status: 'loaded'
+      }
+    });
+
+  } else {
+
+    reactions = await context.prisma.reactions.findMany({
+      orderBy: {
+        allReactionsCounter: 'asc'
+      },
+      where: {
+        status: 'loading'
+      }
+    });
+
+    for (const reaction of reactions) {
+      await context.prisma.reactions.update({
+        where: {
+          reactionKey: reaction.reactionKey,
+        },
+        data: {
+          status: 'loaded'
+        }
+      });
     }
-  });
+
+    reactionsStateHistory = await context.prisma.reactionsStateHistory.findMany({
+      orderBy: {
+        atBlockHeight: 'asc',
+      },
+      where: {
+        status: 'loading'
+      }
+    });
+
+    for (const reactionState of reactionsStateHistory) {
+      await context.prisma.reactionsStateHistory.update({
+        where: {
+          atBlockHeight: reactionState.atBlockHeight
+        },
+        data: {
+          status: 'loaded'
+        }
+      });
+    }
+  }
   
   const reactors = new Set(reactions.map( reaction => reaction.reactorAddress));
   
@@ -198,11 +259,12 @@ export async function regenerateReactionsZkAppState(context: {
     );
   }
   
-  reactions.forEach( reaction => {
+  for (const reaction of reactions) {
     const reactorAddress = PublicKey.fromBase58(reaction.reactorAddress);
     const reactorAddressAsField = Poseidon.hash(reactorAddress.toFields());
     const reactionCodePointAsField = Field(reaction.reactionCodePoint);
     const targetKey = Field(reaction.targetKey);
+    const userReactionsCounter = Field(reaction.userReactionsCounter);
 
     const reactionState = new ReactionState({
       isTargetPost: Bool(reaction.isTargetPost),
@@ -210,7 +272,7 @@ export async function regenerateReactionsZkAppState(context: {
       reactorAddress: reactorAddress,
       reactionCodePoint: reactionCodePointAsField,
       allReactionsCounter: Field(reaction.allReactionsCounter),
-      userReactionsCounter: Field(reaction.userReactionsCounter),
+      userReactionsCounter: userReactionsCounter,
       targetReactionsCounter: Field(reaction.targetReactionsCounter),
       reactionBlockHeight: Field(reaction.reactionBlockHeight),
       deletionBlockHeight: Field(reaction.deletionBlockHeight),
@@ -220,9 +282,33 @@ export async function regenerateReactionsZkAppState(context: {
       Poseidon.hash([targetKey, reactorAddressAsField, reactionCodePointAsField]),
       reactionState.hash()
     );
+
+    // Only update these values when the reaction is new
+    if (reaction.allReactionsCounter > context.totalNumberOfReactions) {
+      context.totalNumberOfReactions += 1;
+      context.usersReactionsCountersMap.set(reactorAddressAsField, userReactionsCounter);
+    }
+  }
+
+  // Get last state update
+  const reactionsLastUpdateRaw = await context.prisma.reactionsStateHistory.aggregate({
+    _max: {
+      atBlockHeight: true
+    }
   });
+  const reactionsLastUpdate = reactionsLastUpdateRaw._max.atBlockHeight;
   
-  context.totalNumberOfReactions = reactions.length;
+  // If state history isn't empty, regenerate it
+  if (reactionsLastUpdate !== null) {
+    context.reactionsLastUpdate = Number(reactionsLastUpdate);
+
+    for (const reactionState of reactionsStateHistory) {
+      context.reactionsStateHistoryMap.set(
+        Field(reactionState.atBlockHeight),
+        Field(reactionState.hashedState)
+      );
+    }
+  }
 
   return reactions;
 }
@@ -419,3 +505,30 @@ export async function  getLastPostsState(prisma: PrismaClient) {
     return null;
   }
 }
+
+// ============================================================================
+
+export async function  getLastReactionsState(prisma: PrismaClient) {
+
+  const reactionsLastUpdateBlockHeight = await prisma.reactionsStateHistory.aggregate({
+    _max: {
+      atBlockHeight: true
+    }
+  });
+
+  if (reactionsLastUpdateBlockHeight._max.atBlockHeight !== null) {
+
+    const lastState = await prisma.reactionsStateHistory.findUnique({
+      where: {
+        atBlockHeight: reactionsLastUpdateBlockHeight._max.atBlockHeight
+      }
+    });
+
+    return lastState;
+
+  } else {
+    return null;
+  }
+}
+
+// ============================================================================
