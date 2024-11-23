@@ -1447,16 +1447,27 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       }
     }
 
-    let lastReactionsState = await getLastReactionsState(prisma);
+    const lastReactionsState = await getLastReactionsState(prisma);
 
+    let lastReactionsStateResponse;
     if (lastReactionsState === null) {
-      lastReactionsState = {
-        allReactionsCounter: BigInt(0),
+      lastReactionsStateResponse = {
+        allReactionsCounter: '0',
         usersReactionsCounters: '',
         targetsReactionsCounters: '',
         reactions: '',
         hashedState: '',
-        atBlockHeight: BigInt(0),
+        atBlockHeight: '0',
+        status: null
+      }
+    } else {
+      lastReactionsStateResponse = {
+        allReactionsCounter: lastReactionsState.allReactionsCounter.toString(),
+        usersReactionsCounters: lastReactionsState.usersReactionsCounters,
+        targetsReactionsCounters: lastReactionsState.targetsReactionsCounters,
+        reactions: lastReactionsState.reactions,
+        hashedState: lastReactionsState.hashedState,
+        atBlockHeight: lastReactionsState.atBlockHeight.toString(),
         status: null
       }
     }
@@ -1482,8 +1493,8 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         hashedQuery,
         Field(lastPostsState.hashedState),
         Field(lastPostsState.atBlockHeight),
-        Field(lastReactionsState.hashedState),
-        Field(lastReactionsState.atBlockHeight)
+        Field(lastReactionsStateResponse.hashedState),
+        Field(lastReactionsStateResponse.atBlockHeight)
       ]
     );
 
@@ -1500,7 +1511,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       posts: lastPostsState.posts,
       hashedState: lastPostsState.hashedState,
       atBlockHeight: lastPostsState.atBlockHeight.toString(),
-      lastReactionsState: JSON.stringify(lastReactionsState),
+      lastReactionsState: lastReactionsStateResponse,
       severSignature: JSON.stringify(severSignature)
     }
 
