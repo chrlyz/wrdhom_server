@@ -1528,7 +1528,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
 
 // ============================================================================
 
-server.get<{Querystring: PostsAudit}>('/posts/audit', async (request) => {
+server.get<{Querystring: HistoricStateAudit}>('/posts/audit', async (request) => {
   try {
     const { atBlockHeight } = request.query
 
@@ -1551,6 +1551,42 @@ server.get<{Querystring: PostsAudit}>('/posts/audit', async (request) => {
         atBlockHeight: historicPostsState!.atBlockHeight.toString()
       },
       historicPostsStateWitness: JSON.stringify(historicPostsStateWitness)
+    }
+
+    return response;
+
+  } catch(e) {
+      console.error(e);
+  }
+});
+
+// ============================================================================
+
+server.get<{Querystring: HistoricStateAudit}>('/reactions/audit', async (request) => {
+  try {
+    const { atBlockHeight } = request.query
+
+    const historicReactionsState = await prisma.reactionsStateHistory.findUnique({
+      where: {
+        atBlockHeight: atBlockHeight
+      }
+    });
+
+    const historicReactionsStateWitness = reactionsStateHistoryMap.getWitness(
+      Field(atBlockHeight)
+    );
+
+    console.log(historicReactionsState)
+    const response = {
+      historicReactionsState: {
+        allReactionsCounter: historicReactionsState!.allReactionsCounter.toString(),
+        userReactionsCounter: historicReactionsState!.usersReactionsCounters,
+        targetsReactionsCounters: historicReactionsState!.targetsReactionsCounters,
+        reactions: historicReactionsState!.reactions,
+        hashedState: historicReactionsState!.hashedState,
+        atBlockHeight: historicReactionsState!.atBlockHeight.toString()
+      },
+      historicReactionsStateWitness: JSON.stringify(historicReactionsStateWitness)
     }
 
     return response;
@@ -2014,7 +2050,7 @@ interface PostsQuery {
   currentUser: string
 }
 
-interface PostsAudit {
+interface HistoricStateAudit {
   atBlockHeight: number
 }
 
