@@ -20,7 +20,8 @@ import {
   regenerateCommentsZkAppState,
   regenerateRepostsZkAppState,
   getLastPostsState,
-  getLastReactionsState
+  getLastReactionsState,
+  getLastCommentsState
 } from './utils/state.js';
 import { CommentState, PostState, ReactionState, fieldToFlagTargetAsReposted,
   RepostState,
@@ -104,21 +105,26 @@ console.log('reactionsStateHistoryRoot: ' + reactionsContext.reactionsStateHisto
 const usersCommentsCountersMap = new MerkleMap();
 const targetsCommentsCountersMap =  new MerkleMap();
 const commentsMap = new MerkleMap();
+const commentsStateHistoryMap = new MerkleMap();
 
 const commentsContext = {
   prisma: prisma,
   usersCommentsCountersMap: usersCommentsCountersMap,
   targetsCommentsCountersMap: targetsCommentsCountersMap,
   commentsMap: commentsMap,
-  totalNumberOfComments: 0
+  totalNumberOfComments: 0,
+  commentsLastUpdate: 0,
+  commentsStateHistoryMap: commentsStateHistoryMap
 }
 
 await regenerateCommentsZkAppState(commentsContext);
 
 console.log('totalNumberOfComments: ' + commentsContext.totalNumberOfComments);
-console.log('usersCommentsCountersMap: ' + usersCommentsCountersMap.getRoot().toString());
-console.log('targetsCommentsCountersMap: ' + targetsCommentsCountersMap.getRoot().toString());
-console.log('commentsMap: ' + commentsMap.getRoot().toString());
+console.log('usersCommentsCountersRoot: ' + usersCommentsCountersMap.getRoot().toString());
+console.log('targetsCommentsCountersRoot: ' + targetsCommentsCountersMap.getRoot().toString());
+console.log('commentsRoot: ' + commentsMap.getRoot().toString());
+console.log('commentsLastUpdate: ' + commentsContext.commentsLastUpdate);
+console.log('commentsStateHistoryRoot: ' + commentsContext.commentsStateHistoryMap.getRoot().toString());
 
 const usersRepostsCountersMap = new MerkleMap();
 const targetsRepostsCountersMap =  new MerkleMap();
@@ -201,56 +207,15 @@ const syncStateTask = new AsyncTask(
       console.log('reactionsStateHistoryRoot: ' + reactionsContext.reactionsStateHistoryMap.getRoot().toString());
     }
 
-    const pendingComments = await prisma.comments.findMany({
-      orderBy: {
-        allCommentsCounter: 'asc'
-      },
-      where: {
-        status: 'loading'
-      }
-    });
-
-    for (const pComment of pendingComments) {
-      const commenterAddress = PublicKey.fromBase58(pComment.commenterAddress);
-      const commentContentIDAsCS = CircuitString.fromString(pComment.commentContentID);
-      
-      console.log(pComment);
-      const commentState = new CommentState({
-        isTargetPost: Bool(pComment.isTargetPost),
-        targetKey: Field(pComment.targetKey),
-        commenterAddress: commenterAddress,
-        commentContentID: commentContentIDAsCS,
-        allCommentsCounter: Field(pComment.allCommentsCounter),
-        userCommentsCounter: Field(pComment.userCommentsCounter),
-        targetCommentsCounter: Field(pComment.targetCommentsCounter),
-        commentBlockHeight: Field(pComment.commentBlockHeight),
-        deletionBlockHeight: Field(pComment.deletionBlockHeight),
-        restorationBlockHeight: Field(pComment.restorationBlockHeight)
-      });
-
-      commentsMap.set(Field(pComment.commentKey), commentState.hash());
-
-      // Only update these values when the comment is new
-      if (pComment.allCommentsCounter > commentsContext.totalNumberOfComments) {
-        commentsContext.totalNumberOfComments += 1;
-        const commenterAddressAsField = Poseidon.hash(commenterAddress.toFields())
-        usersCommentsCountersMap.set(commenterAddressAsField, Field(pComment.userCommentsCounter));
-        targetsCommentsCountersMap.set(Field(pComment.targetKey), Field(pComment.targetCommentsCounter));
-      }
-      
+    let previousCommentsRoot = commentsContext.commentsMap.getRoot().toString();
+    await regenerateCommentsZkAppState(commentsContext);
+    if (previousCommentsRoot !== commentsContext.commentsMap.getRoot().toString()) {
       console.log('totalNumberOfComments: ' + commentsContext.totalNumberOfComments);
-      console.log('usersCommentsCountersMap: ' + usersCommentsCountersMap.getRoot().toString());
-      console.log('targetsCommentsCountersMap: ' + targetsCommentsCountersMap.getRoot().toString());
-      console.log('commentsMap: ' + commentsMap.getRoot().toString());
-
-      await prisma.comments.update({
-        where: {
-          commentKey: pComment.commentKey
-        },
-        data: {
-          status: 'loaded'
-        }
-      });
+      console.log('usersCommentsCountersRoot: ' + usersCommentsCountersMap.getRoot().toString());
+      console.log('targetsCommentsCountersRoot: ' + targetsCommentsCountersMap.getRoot().toString());
+      console.log('commentsRoot: ' + commentsMap.getRoot().toString());
+      console.log('commentsLastUpdate: ' + commentsContext.commentsLastUpdate);
+      console.log('commentsStateHistoryRoot: ' + commentsContext.commentsStateHistoryMap.getRoot().toString());
     }
 
     const pendingReposts = await prisma.reposts.findMany({
@@ -1472,6 +1437,31 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       }
     }
 
+    const lastCommentsState = await getLastCommentsState(prisma);
+
+    let lastCommentsStateResponse;
+    if (lastCommentsState === null) {
+      lastCommentsStateResponse = {
+        allCommentsCounter: '0',
+        usersCommentsCounters: '',
+        targetsCommentsCounters: '',
+        comments: '',
+        hashedState: '',
+        atBlockHeight: '0',
+        status: null
+      }
+    } else {
+      lastCommentsStateResponse = {
+        allCommentsCounter: lastCommentsState.allCommentsCounter.toString(),
+        usersCommentsCounters: lastCommentsState.usersCommentsCounters,
+        targetsCommentsCounters: lastCommentsState.targetsCommentsCounters,
+        comments: lastCommentsState.comments,
+        hashedState: lastCommentsState.hashedState,
+        atBlockHeight: lastCommentsState.atBlockHeight.toString(),
+        status: null
+      }
+    }
+
     let profileAddressForAudit;
     if (profileAddress) {
       const profileAddressAsPublicKey = PublicKey.fromBase58(profileAddress);
@@ -1494,7 +1484,9 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         Field(lastPostsState.hashedState),
         Field(lastPostsState.atBlockHeight),
         Field(lastReactionsStateResponse.hashedState),
-        Field(lastReactionsStateResponse.atBlockHeight)
+        Field(lastReactionsStateResponse.atBlockHeight),
+        Field(lastCommentsStateResponse.hashedState),
+        Field(lastCommentsStateResponse.atBlockHeight),
       ]
     );
 
@@ -1512,6 +1504,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       hashedState: lastPostsState.hashedState,
       atBlockHeight: lastPostsState.atBlockHeight.toString(),
       lastReactionsState: lastReactionsStateResponse,
+      lastCommentsState: lastCommentsStateResponse,
       severSignature: JSON.stringify(severSignature)
     }
 

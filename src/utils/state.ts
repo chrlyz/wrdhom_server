@@ -320,19 +320,78 @@ export async function regenerateCommentsZkAppState(context: {
   usersCommentsCountersMap: MerkleMap,
   targetsCommentsCountersMap: MerkleMap,
   commentsMap: MerkleMap,
-  totalNumberOfComments: number
+  totalNumberOfComments: number,
+  commentsLastUpdate: number,
+  commentsStateHistoryMap: MerkleMap
 }
 ) {
-  const comments = await context.prisma.comments.findMany({
-    orderBy: {
-      allCommentsCounter: 'asc'
-    },
-    where: {
-      commentBlockHeight: {
-        not: 0
+
+  let comments;
+  let commentsStateHistory;
+  if (context.totalNumberOfComments === 0) {
+
+    comments = await context.prisma.comments.findMany({
+      orderBy: {
+        allCommentsCounter: 'asc'
+      },
+      where: {
+        commentBlockHeight: {
+          not: 0
+        }
       }
+    });
+
+    commentsStateHistory = await context.prisma.commentsStateHistory.findMany({
+      orderBy: {
+        atBlockHeight: 'asc',
+      },
+      where: {
+        status: 'loaded'
+      }
+    });
+
+  } else {
+
+    comments = await context.prisma.comments.findMany({
+      orderBy: {
+        allCommentsCounter: 'asc'
+      },
+      where: {
+        status: 'loading'
+      }
+    });
+
+    for (const comment of comments) {
+      await context.prisma.comments.update({
+        where: {
+          commentKey: comment.commentKey,
+        },
+        data: {
+          status: 'loaded'
+        }
+      });
     }
-  });
+
+    commentsStateHistory = await context.prisma.commentsStateHistory.findMany({
+      orderBy: {
+        atBlockHeight: 'asc',
+      },
+      where: {
+        status: 'loading'
+      }
+    });
+
+    for (const commentState of commentsStateHistory) {
+      await context.prisma.commentsStateHistory.update({
+        where: {
+          atBlockHeight: commentState.atBlockHeight
+        },
+        data: {
+          status: 'loaded'
+        }
+      });
+    }
+  }
   
   const commenters = new Set(comments.map( comment => comment.commenterAddress));
   
@@ -361,19 +420,20 @@ export async function regenerateCommentsZkAppState(context: {
           not: 0
         }
       }
-    });
+    })
     context.targetsCommentsCountersMap.set(
       Field(target),
       Field(targetComments.length)
     );
   }
   
-  comments.forEach( comment => {
+  for (const comment of comments) {
     const commenterAddress = PublicKey.fromBase58(comment.commenterAddress);
     const commenterAddressAsField = Poseidon.hash(commenterAddress.toFields());
     const commentContentIDAsCS = CircuitString.fromString(comment.commentContentID);
-    const commentContentIDAsField = commentContentIDAsCS.hash();
+    const commentContentIDAsField = Field(comment.commentContentID);
     const targetKey = Field(comment.targetKey);
+    const userCommentsCounter = Field(comment.userCommentsCounter);
 
     const commentState = new CommentState({
       isTargetPost: Bool(comment.isTargetPost),
@@ -381,7 +441,7 @@ export async function regenerateCommentsZkAppState(context: {
       commenterAddress: commenterAddress,
       commentContentID: commentContentIDAsCS,
       allCommentsCounter: Field(comment.allCommentsCounter),
-      userCommentsCounter: Field(comment.userCommentsCounter),
+      userCommentsCounter: userCommentsCounter,
       targetCommentsCounter: Field(comment.targetCommentsCounter),
       commentBlockHeight: Field(comment.commentBlockHeight),
       deletionBlockHeight: Field(comment.deletionBlockHeight),
@@ -391,9 +451,33 @@ export async function regenerateCommentsZkAppState(context: {
       Poseidon.hash([targetKey, commenterAddressAsField, commentContentIDAsField]),
       commentState.hash()
     );
+
+    // Only update these values when the comment is new
+    if (comment.allCommentsCounter > context.totalNumberOfComments) {
+      context.totalNumberOfComments += 1;
+      context.usersCommentsCountersMap.set(commenterAddressAsField, userCommentsCounter);
+    }
+  }
+
+  // Get last state update
+  const commentsLastUpdateRaw = await context.prisma.commentsStateHistory.aggregate({
+    _max: {
+      atBlockHeight: true
+    }
   });
+  const commentsLastUpdate = commentsLastUpdateRaw._max.atBlockHeight;
   
-  context.totalNumberOfComments = comments.length;
+  // If state history isn't empty, regenerate it
+  if (commentsLastUpdate !== null) {
+    context.commentsLastUpdate = Number(commentsLastUpdate);
+
+    for (const commentState of commentsStateHistory) {
+      context.commentsStateHistoryMap.set(
+        Field(commentState.atBlockHeight),
+        Field(commentState.hashedState)
+      );
+    }
+  }
 
   return comments;
 }
@@ -521,6 +605,31 @@ export async function  getLastReactionsState(prisma: PrismaClient) {
     const lastState = await prisma.reactionsStateHistory.findUnique({
       where: {
         atBlockHeight: reactionsLastUpdateBlockHeight._max.atBlockHeight
+      }
+    });
+
+    return lastState;
+
+  } else {
+    return null;
+  }
+}
+
+// ============================================================================
+
+export async function  getLastCommentsState(prisma: PrismaClient) {
+
+  const commentsLastUpdateBlockHeight = await prisma.commentsStateHistory.aggregate({
+    _max: {
+      atBlockHeight: true
+    }
+  });
+
+  if (commentsLastUpdateBlockHeight._max.atBlockHeight !== null) {
+
+    const lastState = await prisma.commentsStateHistory.findUnique({
+      where: {
+        atBlockHeight: commentsLastUpdateBlockHeight._max.atBlockHeight
       }
     });
 
