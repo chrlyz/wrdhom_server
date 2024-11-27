@@ -17,7 +17,8 @@ import {
   regenerateReactionsZkAppState,
   regenerateRepostsZkAppState,
   getLastPostsState,
-  getLastReactionsState
+  getLastReactionsState,
+  getLastCommentsState
 } from './utils/state.js';
 import * as dotenv from 'dotenv';
 import { Queue, QueueEvents } from 'bullmq';
@@ -166,13 +167,16 @@ await regenerateReactionsZkAppState(reactionsContext);
 const usersCommentsCountersMap = new MerkleMap();
 const targetsCommentsCountersMap =  new MerkleMap();
 const commentsMap = new MerkleMap();
+const commentsStateHistoryMap = new MerkleMap();
 
 const commentsContext = {
   prisma: prisma,
   usersCommentsCountersMap: usersCommentsCountersMap,
   targetsCommentsCountersMap: targetsCommentsCountersMap,
   commentsMap: commentsMap,
-  totalNumberOfComments: 0
+  totalNumberOfComments: 0,
+  commentsLastUpdate: 0,
+  commentsStateHistoryMap: commentsStateHistoryMap
 }
 
 await regenerateCommentsZkAppState(commentsContext);
@@ -1151,12 +1155,22 @@ async function updateCommentsOnChainState(transitionsAndProofs: CommentTransitio
   }
 
   const result = await recursiveMerge(transitionsAndProofs);
-  
+
+  await deleteCandidateCommentsStateHistoryStatus();
+
+  const commentsHashedStateWitness = await updateCandidateCommentsStateHistoryStatus(
+    result.transition.blockHeight,
+    result.transition.latestAllCommentsCounter,
+    result.transition.latestUsersCommentsCounters,
+    result.transition.latestTargetsCommentsCounters,
+    result.transition.latestComments
+  );
+
   let sentTxn;
   const txn = await Mina.transaction(
     { sender: feepayerAddress, fee: fee },
     async () => {
-      commentsContract.update(result.proof);
+      commentsContract.update(result.proof, commentsHashedStateWitness);
     }
   );
   await txn.prove();
@@ -2193,6 +2207,11 @@ async function assertCommentsOnchainAndServerState(pendingComments: CommentsFind
     console.log('targetsCommentsCountersFetch: ' + targetsCommentsCountersFetch!.toString());
     const commentsFetch = await commentsContract.comments.fetch();
     console.log('commentsFetch: ' + commentsFetch!.toString());
+    const commentsLastUpdateFetch = await commentsContract.lastUpdate.fetch();
+    console.log('commentsLastUpdateFetch: ' + commentsLastUpdateFetch!.toString());
+    const commentsStateHistoryFetch = await commentsContract.stateHistory.fetch();
+    console.log('commentsStateHistoryFetch: ' + commentsStateHistoryFetch!.toString());
+
   
     const allCommentsCounterAfter = Field(commentsContext.totalNumberOfComments);
     console.log('allCommentsCounterAfter: ' + allCommentsCounterAfter.toString());
@@ -2202,6 +2221,11 @@ async function assertCommentsOnchainAndServerState(pendingComments: CommentsFind
     console.log('targetsCommentsCountersAfter: ' + targetsCommentsCountersAfter.toString());
     const commentsAfter = commentsMap.getRoot();
     console.log('commentsAfter: ' + commentsAfter.toString());
+    const commentsLastUpdateAfter = Field(commentsContext.commentsLastUpdate);
+    console.log('commentsLastUpdateAfter: ' + commentsLastUpdateAfter.toString());
+    const commentsStateHistoryAfter = commentsStateHistoryMap.getRoot();
+    console.log('commentsStateHistoryAfter: ' + commentsStateHistoryAfter.toString());
+
   
     const allCommentsCounterEqual = allCommentsCounterFetch!.equals(allCommentsCounterAfter).toBoolean();
     console.log('allCommentsCounterEqual: ' + allCommentsCounterEqual);
@@ -2211,12 +2235,39 @@ async function assertCommentsOnchainAndServerState(pendingComments: CommentsFind
     console.log('targetsCommentsCountersEqual: ' + targetsCommentsCountersEqual);
     const commentsEqual = commentsFetch!.equals(commentsAfter).toBoolean();
     console.log('commentsEqual: ' + commentsEqual);
+    const commentsLastUpdateEqual = commentsLastUpdateFetch!.equals(commentsLastUpdateAfter).toBoolean();
+    console.log('commentsLastUpdateEqual: ' + commentsLastUpdateEqual);
+    const commentsStateHistoryEqual = commentsStateHistoryFetch!.equals(commentsStateHistoryAfter).toBoolean();
+    console.log('commentsStateHistoryEqual: ' + commentsStateHistoryEqual);
+
   
-    isUpdated = allCommentsCounterEqual && usersCommentsCountersEqual && targetsCommentsCountersEqual && commentsEqual;
+    isUpdated = allCommentsCounterEqual
+      && usersCommentsCountersEqual
+      && targetsCommentsCountersEqual
+      && commentsEqual
+      && commentsLastUpdateEqual
+      && commentsStateHistoryEqual;
+
     attempts += 1;
   
     if (isUpdated) {
       await prisma.$transaction(async (prismaTransaction) => {
+
+        const lastCommentsState = await getLastCommentsState(prisma);
+
+        // Change status from pending creation to loading 
+        // (by the service that serves the auditable content)
+        await prismaTransaction.commentsStateHistory.update({
+          where: {
+            atBlockHeight: lastCommentsState?.atBlockHeight,
+            status: 'creating'
+          },
+          data: {
+            status: 'loading'
+          }
+        });
+
+        // Change status from pending action to loading
         for (const pComment of pendingComments) {
           if (pComment.status === 'creating') {
             await prismaTransaction.comments.update({
@@ -2263,6 +2314,7 @@ async function assertCommentsOnchainAndServerState(pendingComments: CommentsFind
       });
       return;
     }
+    await delay(DELAY);
   }
   throw new OnchainAndServerStateMismatchError('There is a mismatch between Comments onchain and server state');
 }
@@ -2549,7 +2601,8 @@ async function resetServerCommentPublicationsState(pendingComments: CommentsFind
   const pendingTargets = new Set(pendingComments.map( comment => comment.targetKey));
   for (const target of pendingTargets) {
     const targetComments = await prisma.comments.findMany({
-      where: { targetKey: target,
+      where: {
+        targetKey: target,
         commentBlockHeight: {
           not: 0
         }
@@ -2572,6 +2625,8 @@ async function resetServerCommentPublicationsState(pendingComments: CommentsFind
     );
     console.log('Restored commentsMap root: ' + commentsMap.getRoot().toString());
   });
+
+  await deleteCandidateCommentsStateHistoryStatus();
 }
 
 // ============================================================================
@@ -2869,6 +2924,42 @@ async function updateCandidateReactionsStateHistoryStatus(
 
 // ============================================================================
 
+async function updateCandidateCommentsStateHistoryStatus(
+  blockHeight: Field,
+  allCommentsCounter: Field,
+  usersCommentsCounters: Field,
+  targetsCommentsCounters: Field,
+  comments: Field
+) {
+
+  const lastHashedState = Poseidon.hash([
+    allCommentsCounter,
+    usersCommentsCounters,
+    targetsCommentsCounters,
+    comments
+  ]);
+
+  const commentsHashedStateWitness = commentsStateHistoryMap.getWitness(blockHeight);
+
+  // Update in-memory state for commentsContext
+  commentsContext.commentsLastUpdate = Number(blockHeight);
+  commentsStateHistoryMap.set(blockHeight, lastHashedState);
+
+  // Persist candidate commentsStateHistory entry for the current transaction
+  await createSQLCommentsState(
+    allCommentsCounter,
+    usersCommentsCounters,
+    targetsCommentsCounters,
+    comments,
+    lastHashedState,
+    blockHeight
+  );
+
+  return commentsHashedStateWitness;
+}
+
+// ============================================================================
+
 async function deleteCandidatePostsStateHistoryStatus() {
   const lastPostsState = await getLastPostsState(prisma);
 
@@ -2893,6 +2984,22 @@ async function deleteCandidateReactionsStateHistoryStatus() {
     await prisma.reactionsStateHistory.delete({
       where: {
         atBlockHeight: lastReactionsState.atBlockHeight,
+        status: 'creating'
+      }
+    });
+  }
+}
+
+// ============================================================================
+
+async function deleteCandidateCommentsStateHistoryStatus() {
+  const lastCommentsState = await getLastCommentsState(prisma);
+
+  // Delete last candidate commentsStateHistory entry for failed transaction
+  if (lastCommentsState !== null && lastCommentsState.status == 'creating') {
+    await prisma.commentsStateHistory.delete({
+      where: {
+        atBlockHeight: lastCommentsState.atBlockHeight,
         status: 'creating'
       }
     });
@@ -3210,6 +3317,29 @@ async function createSQLReactionsState (
       reactions: reactions.toString(),
       hashedState: hashedState.toString(),
       atBlockHeight: reactionsLastUpdate.toBigInt(),
+      status: 'creating'
+    }
+  });
+}
+
+// ============================================================================
+
+async function createSQLCommentsState (
+  allCommentsCounter: Field,
+  usersCommentsCounters: Field,
+  targetsCommentsCounters: Field,
+  comments: Field,
+  hashedState: Field,
+  commentsLastUpdate: Field
+) {
+  await prisma.commentsStateHistory.create({
+    data: {
+      allCommentsCounter: allCommentsCounter.toBigInt(),
+      usersCommentsCounters: usersCommentsCounters.toString(),
+      targetsCommentsCounters: targetsCommentsCounters.toString(),
+      comments: comments.toString(),
+      hashedState: hashedState.toString(),
+      atBlockHeight: commentsLastUpdate.toBigInt(),
       status: 'creating'
     }
   });
