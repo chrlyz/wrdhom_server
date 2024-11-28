@@ -1591,6 +1591,42 @@ server.get<{Querystring: HistoricStateAudit}>('/reactions/audit', async (request
 
 // ============================================================================
 
+server.get<{Querystring: HistoricStateAudit}>('/comments/audit', async (request) => {
+  try {
+    const { atBlockHeight } = request.query
+
+    const historicCommentsState = await prisma.commentsStateHistory.findUnique({
+      where: {
+        atBlockHeight: atBlockHeight
+      }
+    });
+
+    const historicCommentsStateWitness = commentsStateHistoryMap.getWitness(
+      Field(atBlockHeight)
+    );
+
+    console.log(historicCommentsState)
+    const response = {
+      historicCommentsState: {
+        allCommentsCounter: historicCommentsState!.allCommentsCounter.toString(),
+        userCommentsCounter: historicCommentsState!.usersCommentsCounters,
+        targetsCommentsCounters: historicCommentsState!.targetsCommentsCounters,
+        comments: historicCommentsState!.comments,
+        hashedState: historicCommentsState!.hashedState,
+        atBlockHeight: historicCommentsState!.atBlockHeight.toString()
+      },
+      historicCommentsStateWitness: JSON.stringify(historicCommentsStateWitness)
+    }
+
+    return response;
+
+  } catch(e) {
+      console.error(e);
+  }
+});
+
+// ============================================================================
+
 server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
   try {
     const { targetKey, howMany, fromBlock, toBlock, commentKey } = request.query;
