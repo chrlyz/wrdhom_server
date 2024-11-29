@@ -431,7 +431,7 @@ export async function regenerateCommentsZkAppState(context: {
     const commenterAddress = PublicKey.fromBase58(comment.commenterAddress);
     const commenterAddressAsField = Poseidon.hash(commenterAddress.toFields());
     const commentContentIDAsCS = CircuitString.fromString(comment.commentContentID);
-    const commentContentIDAsField = Field(comment.commentContentID);
+    const commentContentIDAsField = commentContentIDAsCS.hash();
     const targetKey = Field(comment.targetKey);
     const userCommentsCounter = Field(comment.userCommentsCounter);
 

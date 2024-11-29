@@ -1509,7 +1509,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
     }
 
     const response = {
-      postsAuditMetadata: postsAuditMetadata,
+      auditMetadata: postsAuditMetadata,
       postsResponse: postsResponse
     }
 
@@ -1569,7 +1569,6 @@ server.get<{Querystring: HistoricStateAudit}>('/reactions/audit', async (request
       Field(atBlockHeight)
     );
 
-    console.log(historicReactionsState)
     const response = {
       historicReactionsState: {
         allReactionsCounter: historicReactionsState!.allReactionsCounter.toString(),
@@ -1605,7 +1604,6 @@ server.get<{Querystring: HistoricStateAudit}>('/comments/audit', async (request)
       Field(atBlockHeight)
     );
 
-    console.log(historicCommentsState)
     const response = {
       historicCommentsState: {
         allCommentsCounter: historicCommentsState!.allCommentsCounter.toString(),
@@ -1726,7 +1724,59 @@ server.get<{Querystring: CommentsQuery}>('/comments', async (request) => {
       });
     };
 
+    const lastCommentsState = await getLastCommentsState(prisma);
+
+    let lastCommentsStateResponse;
+    if (lastCommentsState === null) {
+      lastCommentsStateResponse = {
+        allCommentsCounter: '0',
+        usersCommentsCounters: '',
+        targetsCommentsCounters: '',
+        comments: '',
+        hashedState: '',
+        atBlockHeight: '0',
+        status: null
+      }
+    } else {
+      lastCommentsStateResponse = {
+        allCommentsCounter: lastCommentsState.allCommentsCounter.toString(),
+        usersCommentsCounters: lastCommentsState.usersCommentsCounters,
+        targetsCommentsCounters: lastCommentsState.targetsCommentsCounters,
+        comments: lastCommentsState.comments,
+        hashedState: lastCommentsState.hashedState,
+        atBlockHeight: lastCommentsState.atBlockHeight.toString(),
+        status: null
+      }
+    }
+
+    const hashedQuery = Poseidon.hash([
+      Field(howMany),
+      Field(fromBlock),
+      Field(toBlock)
+    ]);
+
+    const severSignature = Signature.create(
+      serverKey,
+      [
+        hashedQuery,
+        Field(lastCommentsStateResponse.hashedState),
+        Field(lastCommentsStateResponse.atBlockHeight)
+      ]
+    );
+
+    const commentsAuditMetadata = {
+      query: {
+        howMany,
+        fromBlock,
+        toBlock
+      },
+      hashedQuery: hashedQuery.toString(),
+      lastCommentsState: lastCommentsStateResponse,
+      severSignature: JSON.stringify(severSignature)
+    }
+
     const response = {
+      auditMetadata: commentsAuditMetadata,
       commentsResponse: commentsResponse
     }
 
