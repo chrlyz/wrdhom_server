@@ -489,19 +489,78 @@ export async function regenerateRepostsZkAppState(context: {
   usersRepostsCountersMap: MerkleMap,
   targetsRepostsCountersMap: MerkleMap,
   repostsMap: MerkleMap,
-  totalNumberOfReposts: number
+  totalNumberOfReposts: number,
+  repostsLastUpdate: number,
+  repostsStateHistoryMap: MerkleMap
 }
 ) {
-  const reposts = await context.prisma.reposts.findMany({
-    orderBy: {
-      allRepostsCounter: 'asc'
-    },
-    where: {
-      repostBlockHeight: {
-        not: 0
+
+  let reposts;
+  let repostsStateHistory;
+  if (context.totalNumberOfReposts === 0) {
+
+    reposts = await context.prisma.reposts.findMany({
+      orderBy: {
+        allRepostsCounter: 'asc'
+      },
+      where: {
+        repostBlockHeight: {
+          not: 0
+        }
       }
+    });
+
+    repostsStateHistory = await context.prisma.repostsStateHistory.findMany({
+      orderBy: {
+        atBlockHeight: 'asc',
+      },
+      where: {
+        status: 'loaded'
+      }
+    });
+
+  } else {
+
+    reposts = await context.prisma.reposts.findMany({
+      orderBy: {
+        allRepostsCounter: 'asc'
+      },
+      where: {
+        status: 'loading'
+      }
+    });
+
+    for (const repost of reposts) {
+      await context.prisma.reposts.update({
+        where: {
+          repostKey: repost.repostKey,
+        },
+        data: {
+          status: 'loaded'
+        }
+      });
     }
-  });
+
+    repostsStateHistory = await context.prisma.repostsStateHistory.findMany({
+      orderBy: {
+        atBlockHeight: 'asc',
+      },
+      where: {
+        status: 'loading'
+      }
+    });
+
+    for (const repostState of repostsStateHistory) {
+      await context.prisma.repostsStateHistory.update({
+        where: {
+          atBlockHeight: repostState.atBlockHeight
+        },
+        data: {
+          status: 'loaded'
+        }
+      });
+    }
+  }
   
   const reposters = new Set(reposts.map( repost => repost.reposterAddress));
   
@@ -537,30 +596,54 @@ export async function regenerateRepostsZkAppState(context: {
     );
   }
   
-  reposts.forEach( repost => {
+  for (const repost of reposts) {
     const reposterAddress = PublicKey.fromBase58(repost.reposterAddress);
     const reposterAddressAsField = Poseidon.hash(reposterAddress.toFields());
     const targetKey = Field(repost.targetKey);
-    const repostKey = Poseidon.hash([targetKey, reposterAddressAsField]);
+    const userRepostsCounter = Field(repost.userRepostsCounter);
 
     const repostState = new RepostState({
       isTargetPost: Bool(repost.isTargetPost),
       targetKey: targetKey,
       reposterAddress: reposterAddress,
       allRepostsCounter: Field(repost.allRepostsCounter),
-      userRepostsCounter: Field(repost.userRepostsCounter),
+      userRepostsCounter: userRepostsCounter,
       targetRepostsCounter: Field(repost.targetRepostsCounter),
       repostBlockHeight: Field(repost.repostBlockHeight),
       deletionBlockHeight: Field(repost.deletionBlockHeight),
       restorationBlockHeight: Field(repost.restorationBlockHeight)
     });
     context.repostsMap.set(
-      repostKey,
+      Poseidon.hash([targetKey, reposterAddressAsField]),
       repostState.hash()
     );
+
+    // Only update these values when the repost is new
+    if (repost.allRepostsCounter > context.totalNumberOfReposts) {
+      context.totalNumberOfReposts += 1;
+      context.usersRepostsCountersMap.set(reposterAddressAsField, userRepostsCounter);
+    }
+  }
+
+  // Get last state update
+  const repostsLastUpdateRaw = await context.prisma.repostsStateHistory.aggregate({
+    _max: {
+      atBlockHeight: true
+    }
   });
+  const repostsLastUpdate = repostsLastUpdateRaw._max.atBlockHeight;
   
-  context.totalNumberOfReposts = reposts.length;
+  // If state history isn't empty, regenerate it
+  if (repostsLastUpdate !== null) {
+    context.repostsLastUpdate = Number(repostsLastUpdate);
+
+    for (const repostState of repostsStateHistory) {
+      context.repostsStateHistoryMap.set(
+        Field(repostState.atBlockHeight),
+        Field(repostState.hashedState)
+      );
+    }
+  }
 
   return reposts;
 }
@@ -630,6 +713,31 @@ export async function  getLastCommentsState(prisma: PrismaClient) {
     const lastState = await prisma.commentsStateHistory.findUnique({
       where: {
         atBlockHeight: commentsLastUpdateBlockHeight._max.atBlockHeight
+      }
+    });
+
+    return lastState;
+
+  } else {
+    return null;
+  }
+}
+
+// ============================================================================
+
+export async function  getLastRepostsState(prisma: PrismaClient) {
+
+  const repostsLastUpdateBlockHeight = await prisma.repostsStateHistory.aggregate({
+    _max: {
+      atBlockHeight: true
+    }
+  });
+
+  if (repostsLastUpdateBlockHeight._max.atBlockHeight !== null) {
+
+    const lastState = await prisma.repostsStateHistory.findUnique({
+      where: {
+        atBlockHeight: repostsLastUpdateBlockHeight._max.atBlockHeight
       }
     });
 

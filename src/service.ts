@@ -21,7 +21,8 @@ import {
   regenerateRepostsZkAppState,
   getLastPostsState,
   getLastReactionsState,
-  getLastCommentsState
+  getLastCommentsState,
+  getLastRepostsState
 } from './utils/state.js';
 import { CommentState, PostState, ReactionState, fieldToFlagTargetAsReposted,
   RepostState,
@@ -129,21 +130,26 @@ console.log('commentsStateHistoryRoot: ' + commentsContext.commentsStateHistoryM
 const usersRepostsCountersMap = new MerkleMap();
 const targetsRepostsCountersMap =  new MerkleMap();
 const repostsMap = new MerkleMap();
+const repostsStateHistoryMap = new MerkleMap();
 
 const repostsContext = {
   prisma: prisma,
   usersRepostsCountersMap: usersRepostsCountersMap,
   targetsRepostsCountersMap: targetsRepostsCountersMap,
   repostsMap: repostsMap,
-  totalNumberOfReposts: 0
+  totalNumberOfReposts: 0,
+  repostsLastUpdate: 0,
+  repostsStateHistoryMap: commentsStateHistoryMap
 }
 
 await regenerateRepostsZkAppState(repostsContext);
 
 console.log('totalNumberOfReposts: ' + repostsContext.totalNumberOfReposts);
-console.log('usersRepostsCountersMap: ' + usersRepostsCountersMap.getRoot().toString());
-console.log('targetsRepostsCountersMap: ' + targetsRepostsCountersMap.getRoot().toString());
-console.log('repostsMap: ' + repostsMap.getRoot().toString());
+console.log('usersRepostsCountersRoot: ' + usersRepostsCountersMap.getRoot().toString());
+console.log('targetsRepostsCountersRoot: ' + targetsRepostsCountersMap.getRoot().toString());
+console.log('repostsRoot: ' + repostsMap.getRoot().toString());
+console.log('repostsLastUpdate: ' + repostsContext.repostsLastUpdate);
+console.log('repostsStateHistoryRoot: ' + repostsContext.repostsStateHistoryMap.getRoot().toString());
 
 // Create posts and comments content directories if they don't exist 
 
@@ -218,54 +224,15 @@ const syncStateTask = new AsyncTask(
       console.log('commentsStateHistoryRoot: ' + commentsContext.commentsStateHistoryMap.getRoot().toString());
     }
 
-    const pendingReposts = await prisma.reposts.findMany({
-      orderBy: {
-        allRepostsCounter: 'asc'
-      },
-      where: {
-        status: 'loading'
-      }
-    });
-
-    for (const pRepost of pendingReposts) {
-      const reposterAddress = PublicKey.fromBase58(pRepost.reposterAddress);
-      
-      console.log(pRepost);
-      const repostState = new RepostState({
-        isTargetPost: Bool(pRepost.isTargetPost),
-        targetKey: Field(pRepost.targetKey),
-        reposterAddress: reposterAddress,
-        allRepostsCounter: Field(pRepost.allRepostsCounter),
-        userRepostsCounter: Field(pRepost.userRepostsCounter),
-        targetRepostsCounter: Field(pRepost.targetRepostsCounter),
-        repostBlockHeight: Field(pRepost.repostBlockHeight),
-        deletionBlockHeight: Field(pRepost.deletionBlockHeight),
-        restorationBlockHeight: Field(pRepost.restorationBlockHeight)
-      });
-    
-      repostsMap.set(Field(pRepost.repostKey), repostState.hash());
-
-      // Only update these values when the repost is new
-      if (pRepost.allRepostsCounter > repostsContext.totalNumberOfReposts) {
-        repostsContext.totalNumberOfReposts += 1;
-        const reposterAddressAsField = Poseidon.hash(reposterAddress.toFields())
-        usersRepostsCountersMap.set(reposterAddressAsField, Field(pRepost.userRepostsCounter));
-        targetsRepostsCountersMap.set(Field(pRepost.targetKey), Field(pRepost.targetRepostsCounter));
-      }
-      
+    let previousRepostsRoot = repostsContext.repostsMap.getRoot().toString();
+    await regenerateRepostsZkAppState(repostsContext);
+    if (previousRepostsRoot !== repostsContext.repostsMap.getRoot().toString()) {
       console.log('totalNumberOfReposts: ' + repostsContext.totalNumberOfReposts);
-      console.log('usersRepostsCountersMap: ' + usersRepostsCountersMap.getRoot().toString());
-      console.log('targetsRepostsCountersMap: ' + targetsRepostsCountersMap.getRoot().toString());
-      console.log('repostsMap: ' + repostsMap.getRoot().toString());
-
-      await prisma.reposts.update({
-        where: {
-          repostKey: pRepost.repostKey
-        },
-        data: {
-          status: 'loaded'
-        }
-      });
+      console.log('usersRepostsCountersRoot: ' + usersRepostsCountersMap.getRoot().toString());
+      console.log('targetsRepostsCountersRoot: ' + targetsRepostsCountersMap.getRoot().toString());
+      console.log('repostsRoot: ' + repostsMap.getRoot().toString());
+      console.log('repostsLastUpdate: ' + repostsContext.repostsLastUpdate);
+      console.log('repostsStateHistoryRoot: ' + repostsContext.repostsStateHistoryMap.getRoot().toString());
     }
 
   },
@@ -1462,6 +1429,31 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       }
     }
 
+    const lastRepostsState = await getLastRepostsState(prisma);
+
+    let lastRepostsStateResponse;
+    if (lastRepostsState === null) {
+      lastRepostsStateResponse = {
+        allRepostsCounter: '0',
+        usersRepostsCounters: '',
+        targetsRepostsCounters: '',
+        reposts: '',
+        hashedState: '',
+        atBlockHeight: '0',
+        status: null
+      }
+    } else {
+      lastRepostsStateResponse = {
+        allRepostsCounter: lastRepostsState.allRepostsCounter.toString(),
+        usersRepostsCounters: lastRepostsState.usersRepostsCounters,
+        targetsRepostsCounters: lastRepostsState.targetsRepostsCounters,
+        reposts: lastRepostsState.reposts,
+        hashedState: lastRepostsState.hashedState,
+        atBlockHeight: lastRepostsState.atBlockHeight.toString(),
+        status: null
+      }
+    }
+
     let profileAddressForAudit;
     if (profileAddress) {
       const profileAddressAsPublicKey = PublicKey.fromBase58(profileAddress);
@@ -1487,6 +1479,8 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         Field(lastReactionsStateResponse.atBlockHeight),
         Field(lastCommentsStateResponse.hashedState),
         Field(lastCommentsStateResponse.atBlockHeight),
+        Field(lastRepostsStateResponse.hashedState),
+        Field(lastRepostsStateResponse.atBlockHeight)
       ]
     );
 
@@ -1505,6 +1499,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       atBlockHeight: lastPostsState.atBlockHeight.toString(),
       lastReactionsState: lastReactionsStateResponse,
       lastCommentsState: lastCommentsStateResponse,
+      lastRepostsState: lastRepostsStateResponse,
       severSignature: JSON.stringify(severSignature)
     }
 
