@@ -104,6 +104,16 @@ model commentsStateHistory {
   status           status_enum?
 }
 
+model repostsStateHistory {
+  allRepostsCounter  BigInt
+  usersRepostsCounters String
+  targetsRepostsCounters String
+  reposts            String
+  hashedState      String
+  atBlockHeight    BigInt       @id
+  status           status_enum?
+}
+
 enum status_enum {
   create
   creating

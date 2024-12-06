@@ -18,7 +18,8 @@ import {
   regenerateRepostsZkAppState,
   getLastPostsState,
   getLastReactionsState,
-  getLastCommentsState
+  getLastCommentsState,
+  getLastRepostsState
 } from './utils/state.js';
 import * as dotenv from 'dotenv';
 import { Queue, QueueEvents } from 'bullmq';
@@ -184,13 +185,16 @@ await regenerateCommentsZkAppState(commentsContext);
 const usersRepostsCountersMap = new MerkleMap();
 const targetsRepostsCountersMap =  new MerkleMap();
 const repostsMap = new MerkleMap();
+const repostsStateHistoryMap = new MerkleMap();
 
 const repostsContext = {
   prisma: prisma,
   usersRepostsCountersMap: usersRepostsCountersMap,
   targetsRepostsCountersMap: targetsRepostsCountersMap,
   repostsMap: repostsMap,
-  totalNumberOfReposts: 0
+  totalNumberOfReposts: 0,
+  repostsLastUpdate: 0,
+  repostsStateHistoryMap: commentsStateHistoryMap
 }
 
 await regenerateRepostsZkAppState(repostsContext);
@@ -1334,12 +1338,22 @@ async function updateRepostsOnChainState(transitionsAndProofs: RepostTransitionA
   }
 
   const result = await recursiveMerge(transitionsAndProofs);
+
+  await deleteCandidateRepostsStateHistoryStatus();
+
+  const repostsHashedStateWitness = await updateCandidateRepostsStateHistoryStatus(
+    result.transition.blockHeight,
+    result.transition.latestAllRepostsCounter,
+    result.transition.latestUsersRepostsCounters,
+    result.transition.latestTargetsRepostsCounters,
+    result.transition.latestReposts
+  );
   
   let sentTxn;
   const txn = await Mina.transaction(
     { sender: feepayerAddress, fee: fee },
     async () => {
-      repostsContract.update(result.proof);
+      repostsContract.update(result.proof, repostsHashedStateWitness);
     }
   );
   await txn.prove();
@@ -2461,6 +2475,10 @@ async function assertRepostsOnchainAndServerState(pendingReposts: RepostsFindMan
     console.log('targetsRepostsCountersFetch: ' + targetsRepostsCountersFetch!.toString());
     const repostsFetch = await repostsContract.reposts.fetch();
     console.log('repostsFetch: ' + repostsFetch!.toString());
+    const repostsLastUpdateFetch = await repostsContract.lastUpdate.fetch();
+    console.log('repostsLastUpdateFetch: ' + repostsLastUpdateFetch!.toString());
+    const repostsStateHistoryFetch = await repostsContract.stateHistory.fetch();
+    console.log('repostsStateHistoryFetch: ' + repostsStateHistoryFetch!.toString());
   
     const allRepostsCounterAfter = Field(repostsContext.totalNumberOfReposts);
     console.log('allRepostsCounterAfter: ' + allRepostsCounterAfter.toString());
@@ -2470,6 +2488,10 @@ async function assertRepostsOnchainAndServerState(pendingReposts: RepostsFindMan
     console.log('targetsRepostsCountersAfter: ' + targetsRepostsCountersAfter.toString());
     const repostsAfter = repostsMap.getRoot();
     console.log('repostsAfter: ' + repostsAfter.toString());
+    const repostsLastUpdateAfter = Field(repostsContext.repostsLastUpdate);
+    console.log('repostsLastUpdateAfter: ' + repostsLastUpdateAfter.toString());
+    const repostsStateHistoryAfter = repostsStateHistoryMap.getRoot();
+    console.log('repostsStateHistoryAfter: ' + repostsStateHistoryAfter.toString());
   
     const allRepostsCounterEqual = allRepostsCounterFetch!.equals(allRepostsCounterAfter).toBoolean();
     console.log('allRepostsCounterEqual: ' + allRepostsCounterEqual);
@@ -2479,12 +2501,38 @@ async function assertRepostsOnchainAndServerState(pendingReposts: RepostsFindMan
     console.log('targetsRepostsCountersEqual: ' + targetsRepostsCountersEqual);
     const repostsEqual = repostsFetch!.equals(repostsAfter).toBoolean();
     console.log('repostsEqual: ' + repostsEqual);
+    const repostsLastUpdateEqual = repostsLastUpdateFetch!.equals(repostsLastUpdateAfter).toBoolean();
+    console.log('repostsLastUpdateEqual: ' + repostsLastUpdateEqual);
+    const repostsStateHistoryEqual = repostsStateHistoryFetch!.equals(repostsStateHistoryAfter).toBoolean();
+    console.log('repostsStateHistoryEqual: ' + repostsStateHistoryEqual);
   
-    isUpdated = allRepostsCounterEqual && usersRepostsCountersEqual && targetsRepostsCountersEqual && repostsEqual;
+    isUpdated = allRepostsCounterEqual
+      && usersRepostsCountersEqual
+      && targetsRepostsCountersEqual
+      && repostsEqual
+      && repostsLastUpdateEqual
+      && repostsStateHistoryEqual;
+
     attempts += 1;
   
     if (isUpdated) {
       await prisma.$transaction(async (prismaTransaction) => {
+
+        const lastRepostsState = await getLastRepostsState(prisma);
+
+        // Change status from pending creation to loading 
+        // (by the service that serves the auditable content)
+        await prismaTransaction.repostsStateHistory.update({
+          where: {
+            atBlockHeight: lastRepostsState?.atBlockHeight,
+            status: 'creating'
+          },
+          data: {
+            status: 'loading'
+          }
+        });
+
+        // Change status from pending action to loading
         for (const pRepost of pendingReposts) {
           if (pRepost.status === 'creating') {
             await prismaTransaction.reposts.update({
@@ -2531,6 +2579,7 @@ async function assertRepostsOnchainAndServerState(pendingReposts: RepostsFindMan
       });
       return;
     }
+    await delay(DELAY);
   }
   throw new OnchainAndServerStateMismatchError('There is a mismatch between Reposts onchain and server state');
 }
@@ -2695,7 +2744,8 @@ async function resetServerRepostPublicationsState(pendingReposts: RepostsFindMan
   const pendingReposters = new Set(pendingReposts.map( repost => repost.reposterAddress));
   for (const reposter of pendingReposters) {
     const userReposts = await prisma.reposts.findMany({
-      where: { reposterAddress: reposter,
+      where: {
+        reposterAddress: reposter,
         repostBlockHeight: {
           not: 0
         }
@@ -2736,6 +2786,9 @@ async function resetServerRepostPublicationsState(pendingReposts: RepostsFindMan
     );
     console.log('Restored repostsMap root: ' + repostsMap.getRoot().toString());
   });
+
+
+  await deleteCandidateRepostsStateHistoryStatus();
 }
 
 // ============================================================================
@@ -2960,6 +3013,42 @@ async function updateCandidateCommentsStateHistoryStatus(
 
 // ============================================================================
 
+async function updateCandidateRepostsStateHistoryStatus(
+  blockHeight: Field,
+  allRepostsCounter: Field,
+  usersRepostsCounters: Field,
+  targetsRepostsCounters: Field,
+  reposts: Field
+) {
+
+  const lastHashedState = Poseidon.hash([
+    allRepostsCounter,
+    usersRepostsCounters,
+    targetsRepostsCounters,
+    reposts
+  ]);
+
+  const repostsHashedStateWitness = repostsStateHistoryMap.getWitness(blockHeight);
+
+  // Update in-memory state for repostsContext
+  repostsContext.repostsLastUpdate = Number(blockHeight);
+  repostsStateHistoryMap.set(blockHeight, lastHashedState);
+
+  // Persist candidate repostsStateHistory entry for the current transaction
+  await createSQLRepostsState(
+    allRepostsCounter,
+    usersRepostsCounters,
+    targetsRepostsCounters,
+    reposts,
+    lastHashedState,
+    blockHeight
+  );
+
+  return repostsHashedStateWitness;
+}
+
+// ============================================================================
+
 async function deleteCandidatePostsStateHistoryStatus() {
   const lastPostsState = await getLastPostsState(prisma);
 
@@ -3000,6 +3089,22 @@ async function deleteCandidateCommentsStateHistoryStatus() {
     await prisma.commentsStateHistory.delete({
       where: {
         atBlockHeight: lastCommentsState.atBlockHeight,
+        status: 'creating'
+      }
+    });
+  }
+}
+
+// ============================================================================
+
+async function deleteCandidateRepostsStateHistoryStatus() {
+  const lastRepostsState = await getLastRepostsState(prisma);
+
+  // Delete last candidate repostsStateHistory entry for failed transaction
+  if (lastRepostsState !== null && lastRepostsState.status == 'creating') {
+    await prisma.repostsStateHistory.delete({
+      where: {
+        atBlockHeight: lastRepostsState.atBlockHeight,
         status: 'creating'
       }
     });
@@ -3340,6 +3445,29 @@ async function createSQLCommentsState (
       comments: comments.toString(),
       hashedState: hashedState.toString(),
       atBlockHeight: commentsLastUpdate.toBigInt(),
+      status: 'creating'
+    }
+  });
+}
+
+// ============================================================================
+
+async function createSQLRepostsState (
+  allRepostsCounter: Field,
+  usersRepostsCounters: Field,
+  targetsRepostsCounters: Field,
+  reposts: Field,
+  hashedState: Field,
+  repostsLastUpdate: Field
+) {
+  await prisma.repostsStateHistory.create({
+    data: {
+      allRepostsCounter: allRepostsCounter.toBigInt(),
+      usersRepostsCounters: usersRepostsCounters.toString(),
+      targetsRepostsCounters: targetsRepostsCounters.toString(),
+      reposts: reposts.toString(),
+      hashedState: hashedState.toString(),
+      atBlockHeight: repostsLastUpdate.toBigInt(),
       status: 'creating'
     }
   });
