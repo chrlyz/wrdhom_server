@@ -139,7 +139,7 @@ const repostsContext = {
   repostsMap: repostsMap,
   totalNumberOfReposts: 0,
   repostsLastUpdate: 0,
-  repostsStateHistoryMap: commentsStateHistoryMap
+  repostsStateHistoryMap: repostsStateHistoryMap
 }
 
 await regenerateRepostsZkAppState(repostsContext);
@@ -1609,6 +1609,41 @@ server.get<{Querystring: HistoricStateAudit}>('/comments/audit', async (request)
         atBlockHeight: historicCommentsState!.atBlockHeight.toString()
       },
       historicCommentsStateWitness: JSON.stringify(historicCommentsStateWitness)
+    }
+
+    return response;
+
+  } catch(e) {
+      console.error(e);
+  }
+});
+
+// ============================================================================
+
+server.get<{Querystring: HistoricStateAudit}>('/reposts/audit', async (request) => {
+  try {
+    const { atBlockHeight } = request.query
+
+    const historicRepostsState = await prisma.repostsStateHistory.findUnique({
+      where: {
+        atBlockHeight: atBlockHeight
+      }
+    });
+
+    const historicRepostsStateWitness = repostsStateHistoryMap.getWitness(
+      Field(atBlockHeight)
+    );
+
+    const response = {
+      historicRepostsState: {
+        allRepostsCounter: historicRepostsState!.allRepostsCounter.toString(),
+        userRepostsCounter: historicRepostsState!.usersRepostsCounters,
+        targetsRepostsCounters: historicRepostsState!.targetsRepostsCounters,
+        reposts: historicRepostsState!.reposts,
+        hashedState: historicRepostsState!.hashedState,
+        atBlockHeight: historicRepostsState!.atBlockHeight.toString()
+      },
+      historicRepostsStateWitness: JSON.stringify(historicRepostsStateWitness)
     }
 
     return response;
