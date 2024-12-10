@@ -2213,7 +2213,7 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
 
     const response = {
       auditMetadata: repostsAuditMetadata,
-      postsResponse: repostsResponse
+      repostsResponse: repostsResponse
     }
 
     return response;
