@@ -2087,8 +2087,133 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
       })
     }
 
+    const lastRepostsState = await getLastRepostsState(prisma);
+
+    let lastRepostsStateResponse;
+    if (lastRepostsState === null) {
+      lastRepostsStateResponse = {
+        allRepostsCounter: '0',
+        usersRepostsCounters: '',
+        targetsRepostsCounters: '',
+        reposts: '',
+        hashedState: '',
+        atBlockHeight: '0',
+        status: null
+      }
+    } else {
+      lastRepostsStateResponse = {
+        allRepostsCounter: lastRepostsState.allRepostsCounter.toString(),
+        usersRepostsCounters: lastRepostsState.usersRepostsCounters,
+        targetsRepostsCounters: lastRepostsState.targetsRepostsCounters,
+        reposts: lastRepostsState.reposts,
+        hashedState: lastRepostsState.hashedState,
+        atBlockHeight: lastRepostsState.atBlockHeight.toString(),
+        status: null
+      }
+    }
+
+    const lastReactionsState = await getLastReactionsState(prisma);
+
+    let lastReactionsStateResponse;
+    if (lastReactionsState === null) {
+      lastReactionsStateResponse = {
+        allReactionsCounter: '0',
+        usersReactionsCounters: '',
+        targetsReactionsCounters: '',
+        reactions: '',
+        hashedState: '',
+        atBlockHeight: '0',
+        status: null
+      }
+    } else {
+      lastReactionsStateResponse = {
+        allReactionsCounter: lastReactionsState.allReactionsCounter.toString(),
+        usersReactionsCounters: lastReactionsState.usersReactionsCounters,
+        targetsReactionsCounters: lastReactionsState.targetsReactionsCounters,
+        reactions: lastReactionsState.reactions,
+        hashedState: lastReactionsState.hashedState,
+        atBlockHeight: lastReactionsState.atBlockHeight.toString(),
+        status: null
+      }
+    }
+
+    const lastCommentsState = await getLastCommentsState(prisma);
+
+    let lastCommentsStateResponse;
+    if (lastCommentsState === null) {
+      lastCommentsStateResponse = {
+        allCommentsCounter: '0',
+        usersCommentsCounters: '',
+        targetsCommentsCounters: '',
+        comments: '',
+        hashedState: '',
+        atBlockHeight: '0',
+        status: null
+      }
+    } else {
+      lastCommentsStateResponse = {
+        allCommentsCounter: lastCommentsState.allCommentsCounter.toString(),
+        usersCommentsCounters: lastCommentsState.usersCommentsCounters,
+        targetsCommentsCounters: lastCommentsState.targetsCommentsCounters,
+        comments: lastCommentsState.comments,
+        hashedState: lastCommentsState.hashedState,
+        atBlockHeight: lastCommentsState.atBlockHeight.toString(),
+        status: null
+      }
+    }
+
+    let profileAddressForAudit;
+    if (profileAddress) {
+      const profileAddressAsPublicKey = PublicKey.fromBase58(profileAddress);
+      profileAddressForAudit = Poseidon.hash(profileAddressAsPublicKey.toFields());
+    } else {
+      profileAddressForAudit = Field(0);
+    }
+
+    const hashedQuery = Poseidon.hash([
+      Field(howMany),
+      Field(fromBlock),
+      Field(toBlock),
+      profileAddressForAudit
+    ]);
+
+    const severSignature = Signature.create(
+      serverKey,
+      [
+        hashedQuery,
+        Field(lastRepostsStateResponse.hashedState),
+        Field(lastRepostsStateResponse.atBlockHeight),
+        Field(lastReactionsStateResponse.hashedState),
+        Field(lastReactionsStateResponse.atBlockHeight),
+        Field(lastCommentsStateResponse.hashedState),
+        Field(lastCommentsStateResponse.atBlockHeight),
+        Field(lastRepostsStateResponse.hashedState),
+        Field(lastRepostsStateResponse.atBlockHeight)
+      ]
+    );
+
+    const repostsAuditMetadata = {
+      query: {
+        howMany,
+        fromBlock,
+        toBlock,
+        profileAddressForAudit
+      },
+      hashedQuery: hashedQuery.toString(),
+      allRepostsCounter: lastRepostsStateResponse.allRepostsCounter.toString(),
+      usersRepostsCounters: lastRepostsStateResponse.usersRepostsCounters,
+      reposts: lastRepostsStateResponse.reposts,
+      hashedState: lastRepostsStateResponse.hashedState,
+      atBlockHeight: lastRepostsStateResponse.atBlockHeight.toString(),
+      lastReactionsState: lastReactionsStateResponse,
+      lastCommentsState: lastCommentsStateResponse,
+      lastRepostsState: lastRepostsStateResponse,
+      severSignature: JSON.stringify(severSignature)
+    }
+
     const response = {
-      repostsResponse: repostsResponse
+      auditMetadata: repostsAuditMetadata,
+      postsResponse: repostsResponse
     }
 
     return response;
