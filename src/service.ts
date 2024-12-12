@@ -1372,10 +1372,24 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
 
     const lastPostsState = await getLastPostsState(prisma);
 
+    let lastPostsStateResponse;
     if (lastPostsState === null) {
-      return {
-        postsAuditMetadata: {},
-        postsResponse: postsResponse
+      lastPostsStateResponse = {
+        allPostsCounter: '0',
+        usersPostsCounters: '',
+        posts: '',
+        hashedState: '',
+        atBlockHeight: '0',
+        status: null
+      }
+    } else {
+      lastPostsStateResponse = {
+        allPostsCounter: lastPostsState.allPostsCounter.toString(),
+        usersPostsCounters: lastPostsState.userPostsCounter,
+        posts: lastPostsState.posts,
+        hashedState: lastPostsState.hashedState,
+        atBlockHeight: lastPostsState.atBlockHeight.toString(),
+        status: null
       }
     }
 
@@ -1473,8 +1487,8 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
       serverKey,
       [
         hashedQuery,
-        Field(lastPostsState.hashedState),
-        Field(lastPostsState.atBlockHeight),
+        Field(lastPostsStateResponse.hashedState),
+        Field(lastPostsStateResponse.atBlockHeight),
         Field(lastReactionsStateResponse.hashedState),
         Field(lastReactionsStateResponse.atBlockHeight),
         Field(lastCommentsStateResponse.hashedState),
@@ -1492,11 +1506,7 @@ server.get<{Querystring: PostsQuery}>('/posts', async (request) => {
         profileAddressForAudit
       },
       hashedQuery: hashedQuery.toString(),
-      allPostsCounter: lastPostsState.allPostsCounter.toString(),
-      userPostsCounter: lastPostsState.userPostsCounter,
-      posts: lastPostsState.posts,
-      hashedState: lastPostsState.hashedState,
-      atBlockHeight: lastPostsState.atBlockHeight.toString(),
+      lastPostsState: lastPostsStateResponse,
       lastReactionsState: lastReactionsStateResponse,
       lastCommentsState: lastCommentsStateResponse,
       lastRepostsState: lastRepostsStateResponse,
@@ -2112,6 +2122,29 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
       }
     }
 
+    const lastPostsState = await getLastPostsState(prisma);
+
+    let lastPostsStateResponse;
+    if (lastPostsState === null) {
+      lastPostsStateResponse = {
+        allPostsCounter: '0',
+        usersPostsCounters: '',
+        posts: '',
+        hashedState: '',
+        atBlockHeight: '0',
+        status: null
+      }
+    } else {
+      lastPostsStateResponse = {
+        allPostsCounter: lastPostsState.allPostsCounter.toString(),
+        usersPostsCounters: lastPostsState.userPostsCounter,
+        posts: lastPostsState.posts,
+        hashedState: lastPostsState.hashedState,
+        atBlockHeight: lastPostsState.atBlockHeight.toString(),
+        status: null
+      }
+    }
+
     const lastReactionsState = await getLastReactionsState(prisma);
 
     let lastReactionsStateResponse;
@@ -2183,12 +2216,12 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
         hashedQuery,
         Field(lastRepostsStateResponse.hashedState),
         Field(lastRepostsStateResponse.atBlockHeight),
+        Field(lastPostsStateResponse.hashedState),
+        Field(lastPostsStateResponse.atBlockHeight),
         Field(lastReactionsStateResponse.hashedState),
         Field(lastReactionsStateResponse.atBlockHeight),
         Field(lastCommentsStateResponse.hashedState),
-        Field(lastCommentsStateResponse.atBlockHeight),
-        Field(lastRepostsStateResponse.hashedState),
-        Field(lastRepostsStateResponse.atBlockHeight)
+        Field(lastCommentsStateResponse.atBlockHeight)
       ]
     );
 
@@ -2200,14 +2233,10 @@ server.get<{Querystring: RepostQuery}>('/reposts', async (request) => {
         profileAddressForAudit
       },
       hashedQuery: hashedQuery.toString(),
-      allRepostsCounter: lastRepostsStateResponse.allRepostsCounter.toString(),
-      usersRepostsCounters: lastRepostsStateResponse.usersRepostsCounters,
-      reposts: lastRepostsStateResponse.reposts,
-      hashedState: lastRepostsStateResponse.hashedState,
-      atBlockHeight: lastRepostsStateResponse.atBlockHeight.toString(),
+      lastRepostsState: lastRepostsStateResponse,
+      lastPostsState: lastPostsStateResponse,
       lastReactionsState: lastReactionsStateResponse,
       lastCommentsState: lastCommentsStateResponse,
-      lastRepostsState: lastRepostsStateResponse,
       severSignature: JSON.stringify(severSignature)
     }
 
